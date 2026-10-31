@@ -437,7 +437,7 @@ P("B6 inject expense scanner module",
 r'''function renderExpenses(el){''',
 M + r'''function renderExpenses(el){''')
 
-
+PATCHES = [p for p in PATCHES if not p[0].startswith('A10')]
 def main():
     if len(sys.argv) < 2:
         print('usage: python3 apply_all.py <index.html> [-o out.html]')
