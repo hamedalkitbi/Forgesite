@@ -17,3 +17,11 @@ No build step required.
    ```bash
    git clone https://github.com/hamedalkitbi/Forgesite.git
    cd Forgesite
+
+## Repository layout
+| Path | Purpose |
+|------|---------|
+| `index.html` | The application (single self-contained file) |
+| `apply_all.py` | Applies all patches to `index.html` |
+| `fix_anchors.py` | Repairs navigation anchor links |
+| `.gitignore` | Git ignore rules |
