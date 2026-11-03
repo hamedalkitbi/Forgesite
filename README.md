@@ -129,7 +129,10 @@ The suite is dependency-free (Node ≥ 20 + a local Chrome/Chromium); it starts 
 own static server and a headless browser over the DevTools Protocol, then cleans up.
 
 ```bash
-npm test               # 49 checks: assets, PWA, runtime, helpers, a11y, Arabic RTL, offline, modules
+npm test               # 51 app checks (PWA, a11y, helpers, offline, module registration)
+npm run test:views     # 31 authenticated view checks (mock Supabase, director + lead roles)
+npm run test:features  # 47 finance + 39 payment-request + 35 payslip + 28 independent math
+npm run test:all       # the whole verification stack
 npm run smoke          # load the app once and fail on any console error / 4xx
 npm run icons          # re-render icons/*.png from icons/icon.svg
 ```
@@ -146,6 +149,12 @@ npm run icons          # re-render icons/*.png from icons/icon.svg
 7. the service worker registers, **precaches both CDN libraries**, and the app renders offline
 8. source invariants stay fixed (button-based nav, modal focus trap, load-generation guard,
    verified deletes, live regions) — a regression here fails CI
+
+The authenticated checks use a mock Supabase backend injected before the page scripts
+(`tools/lib/mock-supabase.mjs`) plus a testkit that drives the real login form
+(`tools/lib/testkit.mjs`), so every view can be exercised without credentials. The feature
+checks cover retention/net rounding, AR/AP/balance-sheet identity, ageing boundaries, OT and
+loan-cap payroll maths, print escaping, role gating and offline behaviour.
 
 If Chrome is not in a standard location, set `CHROME_PATH=/path/to/chrome`.
 

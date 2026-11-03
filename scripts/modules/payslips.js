@@ -1071,6 +1071,7 @@
       var line = st.preview && st.preview[i];
       if (!line) return;
       var raw = el && typeof el === 'object' && 'value' in el ? el.value : el;
+      var inputWasNegative = toNum(raw, 0) < 0;
       var v = toNum(raw, 0);
       if (v < 0) { v = 0; if (el && el.value != null) { try { el.value = '0'; } catch (e) { /* ignore */ } } }
       line._raw = line._raw || {};
@@ -1079,6 +1080,14 @@
       recomputed._raw = line._raw;
       recomputed._extraWarnings = line._extraWarnings || [];
       recomputed.source_rows = line.source_rows;
+      /* The handler normalises the value before computeLine sees it, so add the
+         same clamp warning computeLine would have produced for raw negative input
+         (identical message + same badge rendering). */
+      if (inputWasNegative && field !== 'loan_balance') {
+        var clampKey = field === 'hourly_rate' ? 'negativeRate' : (field === 'other_deductions' ? 'negativeDeduction' : 'negativeHours');
+        var clampMsg = pick(clampKey);
+        if (recomputed.warnings.indexOf(clampMsg) < 0) recomputed.warnings.push(clampMsg);
+      }
       recomputed.warnings = recomputed.warnings.concat(recomputed._extraWarnings);
       st.preview[i] = recomputed;
       updateRowDom(i);
@@ -1127,12 +1136,14 @@
       if (UI.render) UI.render(); else ensureLoaded();
     } catch (e) {
       st.busy = false;
-      st.preview = null;
       if (isMissingTable(e)) {
+        /* The table does not exist: drop the batch and show the migration hint. */
+        st.preview = null;
         st.err = e;
         st.loaded = true;
         if (UI.render) UI.render();
       } else {
+        /* Keep the reviewed batch so the user can retry instead of re-editing. */
         if (UI.render) UI.render();
         if (UI.toast) UI.toast(pick('saveFailed') + ': ' + errText(e), 'bad');
       }

@@ -3033,7 +3033,7 @@ async function writeApproval(it,status,reason){
     updates.approved_by=userProfile?userProfile.name:null;
     updates.approved_at=new Date().toISOString();
   }
-  if(status==='rejected')updates.rejection_reason=reason||null;
+  if(status==='rejected')updates[it.rejectionColumn||'rejection_reason']=reason||null;
   await updatePendingStatus(it.table,it.id,updates,it.pendingStatus||'pending');
   await logTransaction('update',it.table,it.id,(it.label||'')+' '+status+(status==='rejected'&&reason?' ('+reason+')':''),null,null,{status:status,reason:reason||null});
 }
@@ -3097,6 +3097,7 @@ window.approveItem=async function(table,id){
   try{
     await writeApproval(it,'approved',null);
     await refreshApprovalTables([it]);
+    if(window.SF&&SF.approvalsRefresh)SF.approvalsRefresh.forEach(function(fn){try{fn();}catch(e){}});
     delete (window._appSel||{})[approvalKey(table,id)];
     render();toast('Approved ✓','ok');
   }catch(e){toast('Failed: '+(e.message||e),'bad');}

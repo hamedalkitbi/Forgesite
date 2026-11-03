@@ -184,6 +184,36 @@ drift), inclusive upper bounds:
 closed}`; `ageingSummary(rows, today)` aggregates count + net value per bucket
 (the view shows this as the ageing card).
 
+### Executive Approvals Queue integration
+
+The module registers two bridge hooks (added to `scripts/app.js` by the Lead):
+
+- `SF.registerApprovalsSource(fn)` — submitted (`status='submitted'`) requests
+  cached for the open project are appended to the single
+  **Executive Approvals Queue** (`collectPendingItems()`), with
+  `type:'PR'`, `cat:'Payment Requests'`, `table:'payment_requests'`,
+  `amount` = net payable, project code, submitter, and — important — 
+  `pendingStatus:'submitted'` so the queue's compare-and-set update matches the
+  row (`updatePendingStatus` filters on the expected status; without the hint it
+  would 0-row-match).
+- `SF.registerApprovalsRefresh(fn)` — after a batch approve/reject in the queue,
+  the module re-fetches its cache so the project view shows the new statuses.
+
+Because the queue reads sources synchronously during render, it can only surface
+requests the module has already cached: open the **Payment Requests** view once
+for the project and its submitted requests appear in the queue (the sidebar
+approvals badge counts them too). The project-scoped approve/reject buttons in
+this module remain available; both paths write the same audit trail.
+
+The queue's default reject column is `rejection_reason`, while this module's
+column is `rejected_reason` (per the feature spec); the source advertises
+`rejectionColumn:'rejected_reason'` so a queue that honours the hint writes the
+mandatory reason to the right column. Until `writeApproval` in `app.js` supports
+that hint, batch-rejecting a payment request from the queue stores the status
+but drops the reason with the app's standard "unknown column skipped" warning —
+use the module's own Reject button (which requires and stores the reason) for a
+fully documented rejection. Batch approve from the queue is unaffected.
+
 ---
 
 ## 5. UI
@@ -267,9 +297,22 @@ tools/checks/payment-requests.mjs`) and covers:
 2. pure math — retention/net rounding edge cases, negative-net validation,
    reference sequencing, ageing bucket boundaries, print escaping (`<script>` in
    a party name, unsafe logo);
-3. when `tools/lib/testkit.mjs` is on disk, headless integration — director
-   sees approve buttons and super does not, the view renders with seeded
-   fixtures for both roles, and the console has zero errors.
+3. when `tools/lib/testkit.mjs` is on disk, headless integration (mock
+   Supabase, real Chrome) —
+   - director sees approve/reject/pay/delete actions and the seeded rows render;
+   - super sees the same rows but no approve/reject/pay/delete actions;
+   - submitted requests appear in the **Executive Approvals Queue** and can be
+     approved from there (CAS on `status='submitted'`), after which the module
+     view shows them approved;
+   - the full workflow runs through the real UI: create form (auto reference +
+     filtered party dropdown + exact retention/net persisted) → submit →
+     reject without a reason is blocked and with a reason is stored → resubmit →
+     approve (records `approved_by`/`approved_at`) → mark paid (records
+     `payment_method`/`paid_at`);
+   - a missing table renders the migration filename + PostgREST error instead of
+     a blank table (bridge stub returning a PostgREST error);
+   - the live module's print HTML escapes a hostile party name;
+   - the console has zero errors during each scenario.
 
 ---
 
@@ -280,9 +323,12 @@ tools/checks/payment-requests.mjs`) and covers:
   `GENERATED` columns: the client must validate and display them before the row
   exists, and the module has to work against the mock PostgREST in tests.
 - `status` deliberately uses the spec vocabulary (`draft`, `submitted`,
-  `approved`, `rejected`, `paid`). The mock harness's legacy `payment_requests`
-  fixtures use `pending`/`request_no`; the module normalizes unknown statuses to
-  `draft` and falls back to computed amounts, so a legacy row still renders.
+  `approved`, `rejected`, `paid`). Reads are tolerant of pre-migration/fixture
+  rows: legacy `pending` is read as `submitted`, `request_no`/`party_type` are
+  read as the reference/type, `paid_date`/`rejection_reason` are read as the
+  payment/rejection fields, missing retention/net are computed from the amount,
+  and unknown statuses fall back to `draft` — a legacy row still renders instead
+  of throwing.
 - "Paid" writes `paid_at` at 12:00 UTC on the chosen date so the printed date
   does not shift across timezones; `fmtDate` renders the calendar date.
 - Edit is intentionally limited to `draft`/`rejected`/`submitted`; `approved`

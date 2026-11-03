@@ -276,12 +276,14 @@ async function main() {
     assert(views.finance, 'finance view not registered');
     eq(views.finance.nav.section, 'company', 'nav section');
   });
-  await test('AR = certified net payable − received payments', () => {
+  await test('AR = open certified net payable − receipts not consumed by paid certificates', () => {
     const r = api.arTotal(FIXTURE);
-    near(r.certifiedNet, 13500, 'certified net');
-    near(r.received, 4000, 'received');
+    near(r.certifiedNet, 13500, 'open certified net');
+    near(r.paidNet, 0, 'fixture has no paid certificates');
+    near(r.received, 4000, 'receipts');
     near(r.ar, 9500, 'AR');
-    eq(r.count, 2, 'certified certificate count (draft excluded)');
+    eq(r.count, 2, 'open certified certificate count (draft excluded)');
+    eq(r.paidCount, 0, 'paid certificate count');
   });
   await test('AP = approved payment requests + material AP + unpaid supplier invoices', () => {
     const r = api.apTotal(FIXTURE);
@@ -332,6 +334,88 @@ async function main() {
     near(a.d31_60, 5000, 'oldest residual is 31-60 days');
     near(a.d1_30, 4500, 'newer invoice is 1-30 days');
   });
+  /* P2 review regression: a certificate flipped to status 'paid' must never be
+   * an outstanding receivable and must never inflate the Overdue KPI, while a
+   * matching client receipt must not be counted twice. */
+  const paidMix = {
+    projects: [{ id: 'p1', code: 'P1', name: 'Project 1' }],
+    billings: [
+      { id: 'c1', billing_no: 'PB-C1', status: 'certified', total_claim: 1000, net_payable: 1000, retention_amount: 0, vat_amount: 0, period_to: '2026-02-01', project_id: 'p1' },
+      { id: 'p1', billing_no: 'PB-P1', status: 'paid', total_claim: 500, net_payable: 500, retention_amount: 0, vat_amount: 0, period_to: '2026-01-01', project_id: 'p1' }
+    ],
+    payments: []
+  };
+  function overdueOf(age) { return age.d1_30 + age.d31_60 + age.d61_90 + age.d90plus; }
+  function withReceipts(base, amounts) {
+    return Object.assign({}, base, {
+      payments: amounts.map((amount, i) => ({ id: 'rc' + i, payment_type: 'received', amount, status: 'paid' }))
+    });
+  }
+
+  await test('PAID certificate with no receipt is settled by status (not AR, not Overdue)', () => {
+    const r = api.arTotal(paidMix);
+    near(r.certifiedNet, 1000, 'open certified net');
+    near(r.paidNet, 500, 'paid net');
+    near(r.ar, 1000, 'paid certificate excluded from AR (not 1,500)');
+    const a = api.arAgeing(paidMix, { today: TODAY });
+    near(a.total, 1000, 'ageing total == AR');
+    eq(a.rows.length, 1, 'only the certified invoice is aged');
+    eq(a.rows[0].reference, 'PB-C1', 'paid PB-P1 must not appear in receivable rows');
+    eq(a.rows[0].status, 'certified', 'aged receivable rows are certified');
+    near(overdueOf(a), 1000, 'Overdue KPI only counts the open certified certificate');
+  });
+
+  await test('PAID certificate + matching receipt does not double count', () => {
+    const data = withReceipts(paidMix, [500]);
+    const r = api.arTotal(data);
+    near(r.receiptsAppliedToPaid, 500, 'receipt consumed by the paid certificate');
+    near(r.receiptsAppliedToCertified, 0, 'nothing applied to open invoices');
+    near(r.ar, 1000, 'AR is the open certified invoice only');
+    const a = api.arAgeing(data, { today: TODAY });
+    eq(a.rows.length, 1, 'paid certificate still absent from ageing');
+    near(overdueOf(a), 1000, 'Overdue excludes the paid certificate');
+  });
+
+  await test('receipts below paid net are consumed by paid certificates', () => {
+    const r = api.arTotal(withReceipts(paidMix, [200]));
+    near(r.receiptsAppliedToPaid, 200, 'partial receipt applied to paid certificate');
+    near(r.receiptsAppliedToCertified, 0, 'open invoice untouched');
+    near(r.ar, 1000, 'open certified AR (paid certificate not resurrected)');
+  });
+
+  await test('receipts above paid + open certificates become a negative AR advance', () => {
+    const data = withReceipts(paidMix, [2000]);
+    const r = api.arTotal(data);
+    near(r.receiptsAppliedToPaid, 500, 'paid certificate consumed first');
+    near(r.advance, 500, 'excess receipts are unapplied advances');
+    near(r.ar, -500, 'AR is negative (client advance)');
+    const a = api.arAgeing(data, { today: TODAY });
+    near(a.total, -500, 'ageing total == negative AR');
+    near(a.current, -500, 'advance sits in the current bucket');
+    /* Fully settled invoices have 0 outstanding and are not aged; only the
+     * unapplied-advance credit row remains. */
+    eq(a.rows.length, 1, 'only the advance credit row is outstanding');
+    eq(a.rows[0].status, 'credit', 'credit row present');
+  });
+
+  await test('closed form: AR = certifiedNet − max(0, receipts − paidNet)', () => {
+    for (const receipts of [0, 100, 500, 800, 1500, 2600]) {
+      const r = api.arTotal(withReceipts(paidMix, [receipts]));
+      const expected = 1000 - Math.max(0, receipts - 500);
+      near(r.ar, expected, `AR closed form at receipts=${receipts}`);
+    }
+  });
+
+  await test('balance sheet identity stays green with paid certificates and receipts', () => {
+    const data = withReceipts(paidMix, [800]);
+    const bs = api.balanceSheet(data, { today: TODAY });
+    near(bs.ar, 700, 'AR after paid-certificate consumption and 300 applied to the open invoice');
+    near(bs.cash, 800, 'cash from the recorded receipt');
+    near(bs.assets, 1500, 'assets = cash + AR');
+    near(bs.diff, 0, 'identity difference');
+    eq(bs.balanced, true, 'balanced flag with paid certificates present');
+  });
+
   await test('AP ageing covers payment requests, materials and supplier invoices', () => {
     const a = api.apAgeing(FIXTURE, { today: TODAY });
     near(a.total, api.apTotal(FIXTURE).ap, 'ageing total == AP');
@@ -531,6 +615,54 @@ async function runBrowserChecks(testkit) {
         near(totals.age31, 20, 'live ageing 31-day boundary');
       });
 
+      await test('PAID certificate is excluded from live AR rows and the Overdue KPI', async () => {
+        const r = await evaluate(`(function(){
+          var f = window.SF_modules.finance;
+          var db = window.__MOCK_DB;
+          var data = {
+            payments: db.payments, billings: db.progress_billings, materials: db.materials,
+            timesheets: db.timesheets, expenses: db.company_expenses,
+            paymentRequests: db.payment_requests, projects: db.projects,
+            settings: (db.finance_settings && db.finance_settings[0]) || null
+          };
+          var ar = f.arTotal(data);
+          /* No explicit today: mock fixtures use dates relative to the real run
+           * date, so the default (real today) keeps the overdue proof valid. */
+          var age = f.arAgeing(data);
+          var paid = (db.progress_billings || []).filter(function (b) { return b.status === 'paid'; });
+          var certified = (db.progress_billings || []).filter(function (b) { return b.status === 'certified'; });
+          return {
+            ar: ar.ar, certifiedNet: ar.certifiedNet, paidNet: ar.paidNet, receipts: ar.received,
+            ageTotal: age.total, rows: age.rows.map(function (x) { return x.reference + ':' + x.status; }),
+            paidNumbers: paid.map(function (b) { return b.billing_no; }),
+            certifiedNumbers: certified.map(function (b) { return b.billing_no; }),
+            overdue: age.d1_30 + age.d31_60 + age.d61_90 + age.d90plus
+          };
+        })()`);
+        assert(r.paidNet > 0, 'mock fixtures must include a paid certificate for this regression');
+        assert(r.certifiedNumbers.length >= 1, 'mock fixtures must include a certified certificate');
+        near(r.ageTotal, r.ar, 'live ageing total == live AR');
+        assert(r.rows.every((row) => row.indexOf(':certified') >= 0), 'only certified rows may be aged: ' + r.rows.join(','));
+        for (const paidNumber of r.paidNumbers) {
+          assert(!r.rows.some((row) => row.indexOf(paidNumber + ':') === 0), `paid certificate ${paidNumber} must not appear in receivable rows`);
+        }
+        if (r.receipts <= r.paidNet) {
+          near(r.ar, r.certifiedNet, 'receipts consumed by paid certificates → AR = open certified net');
+        }
+        /* DOM: the paid IPC must not be listed in the Receivables drill-down and
+         * the tab must disclose the settlement reconciliation. */
+        const text = await evaluate(`(function(){
+          var b = document.querySelector('[data-sf-tab="ar"]');
+          if (b) b.click();
+          return document.getElementById('main').textContent || '';
+        })()`);
+        assert(/Settlement reconciliation/.test(text), 'settlement reconciliation line missing from Receivables tab');
+        for (const paidNumber of r.paidNumbers) {
+          assert(text.indexOf(paidNumber) < 0, `paid certificate ${paidNumber} must not render in the Receivables tab`);
+        }
+        assert(r.overdue > 0 && r.overdue < r.ar + 0.01, 'Overdue KPI stays part of open AR only');
+      });
+
       await test('CSV export helpers resist formula injection on the live page', async () => {
         const csv = await evaluate(`(function(){
           var f = window.SF_modules.finance;
@@ -576,6 +708,66 @@ async function runBrowserChecks(testkit) {
     });
   } catch (error) {
     record('testkit browser run', false, error && error.message ? error.message : error);
+  }
+
+  /* Manager-only write action: the opening-balances editor must be reachable by a
+   * director and guarded by SF.ui.canManage(). */
+  try {
+    await testkit.withApp({ role: 'director', settings: { language: 'ar' } }, async (app) => {
+      const { evaluate, goView, waitFor } = app;
+      await goView('finance');
+      await waitFor(`!!document.querySelector('[data-sf-tab="bs"]')`, { label: 'finance tabs' });
+      await test('Arabic UI renders localised title, tabs and balance sheet', async () => {
+        const text = await evaluate(`(document.getElementById('main').textContent || '')`);
+        assert(/الحسابات المالية/.test(text), 'Arabic title missing');
+        assert(/المستحقات/.test(text), 'Arabic receivables tab missing');
+        assert(/الميزانية العمومية/.test(text), 'Arabic balance-sheet tab missing');
+      });
+      await test('director can open the manager-only opening-balances editor', async () => {
+        const clicked = await evaluate(`(function(){
+          var bs = document.querySelector('[data-sf-tab="bs"]');
+          if (bs) bs.click();
+          var btn = document.querySelector('[data-sf-action="edit-settings"]');
+          if (!btn) return false;
+          btn.click();
+          return true;
+        })()`);
+        assert(clicked, 'edit-settings button missing for director');
+        await waitFor(
+          `(function(){var r=document.getElementById('modalRoot');return !!r && getComputedStyle(r).display==='block' && !!document.getElementById('f_opening_cash_aed');})()`,
+          { label: 'opening-balances modal' }
+        );
+        const fields = await evaluate(`(function(){
+          return ['f_fiscal_year','f_opening_cash_aed','f_opening_equity_aed','f_notes'].filter(function(id){return !!document.getElementById(id);});
+        })()`);
+        eq(fields.length, 4, 'opening-balances form fields');
+        await evaluate('window.closeModal();true');
+      });
+    });
+  } catch (error) {
+    record('testkit director settings run', false, error && error.message ? error.message : error);
+  }
+
+  /* Role gate: the finance view is registered for director/controller only. */
+  try {
+    await testkit.withApp({ role: 'lead' }, async (app) => {
+      const { evaluate } = app;
+      await test('finance view is denied for non-finance roles (lead)', async () => {
+        const state = await evaluate(`(function(){
+          var has = !!(window.SF && window.SF.ui && window.SF.ui.hasView && window.SF.ui.hasView('finance'));
+          var nav = !!document.querySelector('#sidebar [onclick*="finance"]');
+          return { has: has, nav: nav };
+        })()`);
+        eq(state.has, false, 'lead must not have the finance view');
+        eq(state.nav, false, 'lead must not see the finance nav entry');
+        await evaluate(`window.goView('finance');true`);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const rendered = await evaluate(`!!document.querySelector('[data-sf-finance]')`);
+        eq(rendered, false, 'finance view must not render for lead');
+      });
+    });
+  } catch (error) {
+    record('testkit lead role run', false, error && error.message ? error.message : error);
   }
 }
 

@@ -3,7 +3,41 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
-## [Unreleased]
+## [29.2.0] - 2026-11-03
+
+### Added
+- Payment Requests module (subcontractors & suppliers): retention + advance recovery,
+  submit → approve/reject → pay, ageing, printable request document; feeds the
+  Executive Approvals Queue
+- Financial Accounts module: company-wide receivables, payables/ageing, derived
+  balance sheet (identity holds by construction) and P&L/project profitability,
+  CSV export and branded print/PDF
+- Payslips module: batch generation from approved timesheets, editable preview,
+  idempotent save per worker/period, per-slip and bulk print/PDF, loan deduction
+  capped with carry-forward
+- `window.SF` module bridge (`registerView`, `navItems`, `db.selectStrict`, `db.upsert`,
+  `ui.*`, approval-source hooks) so features live in `scripts/modules/`
+- Migrations: `payment_requests`, `finance_settings`, `payslips`, PO approval columns,
+  `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies
+- Mock-Supabase harness + `withApp` testkit (`tools/lib/mock-supabase.mjs`,
+  `tools/lib/testkit.mjs`), authenticated view smoke (`tools/tests/app-views.mjs`),
+  per-module checks and an independent cross-module math audit
+
+### Changed
+- Approvals: decisions use a `status='pending'` CAS, record approver and timestamp,
+  rejections carry a reason, and module items join one queue
+- POs show the approving manager; batch approval logs only items that actually succeeded
+- Payroll loan deduction is capped at salary as well as the outstanding loan, with the
+  shortfall carried forward
+
+### Fixed
+- Site-report photos were embedded as base64 in the row (payload limits + silent column
+  drop meant pictures never saved); they now upload to Supabase Storage with signed-URL
+  thumbnails and explicit failure messages; deleting a report removes its objects
+
+## [29.1.0] - 2026-11-03
+
+### Added
 
 ### Added
 - PWA: `site.webmanifest`, offline app-shell service worker (`sw.js` with versioned

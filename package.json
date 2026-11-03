@@ -1,6 +1,6 @@
 {
   "name": "forgesite",
-  "version": "29.0.0",
+  "version": "29.2.0",
   "private": true,
   "description": "SiteForge ERP - browser-based field-to-office construction cost certification SPA",
   "license": "MIT",
@@ -8,7 +8,11 @@
     "serve": "python3 -m http.server 8899 --bind 127.0.0.1",
     "smoke": "node tools/smoke.mjs",
     "test": "node tools/run-tests.mjs",
-    "icons": "node tools/make-icons.mjs"
+    "icons": "node tools/make-icons.mjs",
+    "test:views": "node tools/tests/app-views.mjs",
+    "test:features": "node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs",
+    "test:all": "node tools/run-tests.mjs && node tools/tests/app-views.mjs && node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs",
+    "screenshots": "node tools/screenshots.mjs && node tools/screenshots-modules.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -37,6 +37,12 @@ jobs:
       - name: Run tests
         run: node tools/run-tests.mjs
 
+      - name: Authenticated view smoke (mock Supabase)
+        run: node tools/tests/app-views.mjs
+
+      - name: Feature checks (payment requests, finance, payslips, math)
+        run: npm run test:features
+
       - name: Upload Chrome log on failure
         if: failure()
         uses: actions/upload-artifact@v4

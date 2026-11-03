@@ -661,7 +661,12 @@
     return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
   }
   function statusKey(status) {
-    return STATUSES.indexOf(status) >= 0 ? status : 'draft';
+    var s = String(status === null || status === undefined ? '' : status).toLowerCase();
+    // Tolerant read of pre-migration / fixture rows: a request awaiting a
+    // decision used to be stored as 'pending' (the migration's vocabulary is
+    // 'submitted'). Unknown values fall back to draft instead of throwing.
+    if (s === 'pending') s = 'submitted';
+    return STATUSES.indexOf(s) >= 0 ? s : 'draft';
   }
   function statusLabel(status) {
     var map = { draft: 'statusDraft', submitted: 'statusSubmitted', approved: 'statusApproved', rejected: 'statusRejected', paid: 'statusPaid' };
@@ -706,7 +711,11 @@
   }
   function partyNameOf(row) {
     var p = partyOf(row);
-    return p ? (p.name || p.companyName || '—') : tr('unknownParty');
+    if (p) return p.name || p.companyName || '—';
+    // Pre-migration rows may carry a denormalized display name instead of a
+    // resolvable party_id — show it rather than "unknown party".
+    if (row && row.party_name) return String(row.party_name);
+    return tr('unknownParty');
   }
 
   /* ------------------------------------------------------------------ */
@@ -730,12 +739,15 @@
     var adv = toNum(r.advance_recovery_aed, 0);
     var retention = (r.retention_aed !== undefined && r.retention_aed !== null) ? toNum(r.retention_aed, 0) : computeRetention(amount, pct);
     var net = (r.net_aed !== undefined && r.net_aed !== null) ? toNum(r.net_aed, 0) : computeNet(amount, retention, adv);
+    var type = TYPES.indexOf(r.request_type) >= 0 ? r.request_type : (TYPES.indexOf(r.party_type) >= 0 ? r.party_type : 'subcontractor');
     return {
       id: r.id,
       project_id: r.project_id,
       party_id: r.party_id || null,
-      request_type: TYPES.indexOf(r.request_type) >= 0 ? r.request_type : 'subcontractor',
-      reference: r.reference || '',
+      party_name: r.party_name || '',
+      request_type: type,
+      // Pre-migration/fixture rows used request_no for the reference column.
+      reference: r.reference || r.request_no || '',
       description: r.description || '',
       amount_aed: amount,
       retention_pct: pct,
@@ -747,8 +759,8 @@
       requested_by: r.requested_by || '',
       approved_by: r.approved_by || '',
       approved_at: r.approved_at || null,
-      rejected_reason: r.rejected_reason || '',
-      paid_at: r.paid_at || null,
+      rejected_reason: r.rejected_reason || r.rejection_reason || '',
+      paid_at: r.paid_at || r.paid_date || null,
       payment_method: r.payment_method || '',
       notes: r.notes || '',
       created_at: r.created_at || null
@@ -1575,10 +1587,58 @@
     }
   }
 
-  bridge().registerView({
+  /* ------------------------------------------------------------------ */
+  /* Executive Approvals Queue integration                               */
+  /* The queue calls registered sources synchronously while it renders,  */
+  /* so it can only surface rows this module has already cached for the  */
+  /* open project: once the Payment Requests view has been opened, its   */
+  /* submitted requests appear in the single approvals queue. The queue  */
+  /* performs a CAS update on status='submitted' (pendingStatus) and     */
+  /* writes approved_by/approved_at itself; our own approve/reject       */
+  /* buttons remain available as the project-scoped path.                */
+  /* ------------------------------------------------------------------ */
+  function approvalsSource() {
+    var S = bridge();
+    if (!S) return [];
+    var pid = projectId();
+    if (!pid || state.projectId !== pid) return [];
+    var projectCode = (S.currentProject && S.currentProject.code) || '—';
+    return state.rows.filter(function (r) {
+      return r.status === 'submitted';
+    }).map(function (r) {
+      var label = r.reference || '';
+      var party = partyNameOf(r);
+      if (party && party !== tr('unknownParty')) label += ' · ' + party;
+      var desc = String(r.description || '');
+      if (desc) label += ' · ' + desc.slice(0, 40);
+      return {
+        type: 'PR',
+        cat: 'Payment Requests',
+        id: r.id,
+        table: TABLE,
+        label: label,
+        amount: toNum(r.net_aed, 0),
+        project: projectCode,
+        submitter: r.requested_by || '—',
+        pendingStatus: 'submitted',
+        // The approvals queue writes reject reasons to rejection_reason by
+        // default; this module's column is rejected_reason (migration spec).
+        rejectionColumn: 'rejected_reason'
+      };
+    });
+  }
+  function approvalsRefresh() {
+    // A batch decision in the queue changed statuses — re-fetch our cache.
+    try { return reload(); } catch (e) { return Promise.resolve(); }
+  }
+
+  var bridgeRef = bridge();
+  bridgeRef.registerView({
     id: MODULE_ID,
     nav: { section: 'project', icon: '🧾', label: 'Payment Requests', labelAr: 'طلبات الدفع' },
     roles: ['director', 'controller', 'super'],
     render: render
   });
+  if (typeof bridgeRef.registerApprovalsSource === 'function') bridgeRef.registerApprovalsSource(approvalsSource);
+  if (typeof bridgeRef.registerApprovalsRefresh === 'function') bridgeRef.registerApprovalsRefresh(approvalsRefresh);
 })();

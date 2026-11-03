@@ -75,6 +75,47 @@ Audit baseline: 3 ARIA attributes, 0 `tabindex`, 0 `aria-live`, 0 `:focus-visibl
 
 ---
 
+## 1.5 Owner-requested feature wave (v29.2)
+
+Five requested items shipped as modules behind the `window.SF` bridge, plus one bug fix and one
+approval-system upgrade. `app.js` was touched only for the bridge, the approval queue and the
+photo/approval fixes — feature code lives in `scripts/modules/`.
+
+| Request | Status | Where |
+|---|---|---|
+| "OP needs an approval system" (Purchase Orders) | **Done** | POs and all approvable rows now decide with a `status='pending'` CAS, record `approved_by`/`approved_at`/`rejection_reason`, appear with the approver in the PO table, and feed one Executive Approvals Queue |
+| Site report does not upload pictures | **Fixed** | Photos now upload to the `siteforge-files` bucket and rows store `[{name,path,size}]`; signed-URL thumbnails, legacy inline rows still render, deleting a report removes its objects |
+| Subcontractor/supplier payment requests | **Done** | `scripts/modules/payment-requests.js` — retention + advance recovery, submit → approve/reject → pay, ageing, printable request, feeds the Executive Approvals Queue |
+| Financial accounts: balance sheet, AR, AP | **Done** | `scripts/modules/finance-statements.js` — company-wide Receivables, Payables, derived Balance Sheet (balanced by construction) and P&L/project profitability, CSV + print |
+| Payroll payslip generator | **Done** | `scripts/modules/payslips.js` — batch from approved timesheets, editable preview, idempotent save, per-slip and bulk print/PDF, loan deduction capped with carry-forward |
+| "Check all calculations" | **Done** | 28/28 hand-computed independent checks + 40 finance + 38 payment-request + 35 payslip checks + 51 app checks + 31 authenticated view checks (see §4) |
+
+**Why site-report photos silently failed:** `saveSiteReport` embedded each compressed JPEG as a
+base64 `data:` URL inside the `site_reports.photos` JSON column. Large/multiple photos exceed the
+row payload limits, and the app's "unknown column" tolerance would drop the column and still toast
+*Saved* — so pictures vanished with no error. Uploads now happen before the row is written and a
+failed upload aborts the save with an explicit message.
+
+**Database changes:** four idempotent migrations under `supabase/migrations/` (see §5). Modules
+render a "needs a database update" card naming the file until they are applied.
+
+**Independently verified numbers** (hand-computed fixture, not the modules' own fixtures):
+AR = 13,500 certified − 4,000 received = **9,500**; AP = **3,900** (PR net 900 + unpaid supplier
+3,000); cash **500**; retention **1,500**; VAT **675**; assets **10,000**; liabilities **6,075**;
+equity **3,925**; balance-sheet diff **0.00**; P&L revenue **13,500**, gross **11,000**, net
+**9,000**; payslip 8h@25 + 2h OT → gross **275**, loan capped at gross → net **0**, shortfall
+**225**; payment-request 1000 @ 2.5% → retention **25.00**, net **975.00**.
+
+### Review item resolved
+
+- **AR vs `status='paid'` certificates:** finance-dev adopted *status-aware settlement* —
+  paid certificates are settled by status (out of AR, ageing rows and the Overdue KPI), recorded
+  receipts are consumed by paid certificates first (no double count) and then FIFO against open
+  certified invoices, with leftovers shown as a client-advance credit row. The Receivables tab,
+  CSV and print pack now include a "Settlement reconciliation" line. Closed form:
+  `AR = Σ net_payable(certified) − max(0, receipts − Σ net_payable(paid))`. Covered by 7 new
+  regression checks (47/47 in the finance suite).
+
 ## 2. Audit backlog (still open)
 
 Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·
@@ -125,13 +166,30 @@ Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](a
 ## 4. Verify
 
 ```bash
-npm run serve      # http://127.0.0.1:8899
-npm test           # 43 checks, headless Chrome, self-contained
-npm run smoke      # single load, fails on console errors / 4xx
-npm run icons      # regenerate icons/*.png from icons/icon.svg
+npm run serve             # http://127.0.0.1:8899
+npm test                  # 51 app checks (PWA, a11y, helpers, offline, modules)
+npm run test:views        # 31 authenticated view checks via mock Supabase (all roles)
+npm run test:features     # 40 finance + 38 payment-request + 35 payslip + 28 independent math
+npm run test:all          # everything above, in order
+npm run smoke             # single load, fails on console errors / 4xx
+npm run screenshots       # regenerate docs/screenshots/*.png
+npm run icons             # regenerate icons/*.png from icons/icon.svg
 ```
 
 HTML lint (as CI runs it): `npx --yes htmlhint@1 "index.html"`.
 
 > Note: the audit reports were written against the pre-fix tree. They remain the backlog of
 > record; line numbers drift after this branch, so match on function names, not line numbers.
+
+## 5. Migrations to run (in filename order)
+
+| File | Adds |
+|---|---|
+| `202611031001_payment_requests.sql` | `payment_requests` + RLS |
+| `202611031002_finance_statements.sql` | `finance_settings` + RLS |
+| `202611031003_payslips.sql` | `payslips` + RLS |
+| `202611031004_po_approvals_and_site_photos.sql` | approver columns, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
+
+Run them in the Supabase SQL editor. Until then the three modules show a migration hint card and
+the rest of the app is unaffected. RLS hardening (making the public anon key safe) is still the
+top item in §2.

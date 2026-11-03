@@ -450,23 +450,29 @@ async function printChecks(api, SF) {
     assert(html.includes('&lt;img src=x'), 'img name was not HTML-escaped');
   });
   await test('print document carries branding, earnings/deductions, net and 3 signatures', () => {
-    const html = api.buildPrintHtml([{
-      worker_name: 'Alice Dsouza', staff_no: 'EMP-9001', nationality: 'Indian', trade: 'CONC', period: '2026-11',
-      days_worked: 2, reg_hours: 8, ot_hours: 2, hourly_rate: 25, ot_rate: 37.5, gross: 275,
-      loan_deduction: 100, other_deductions: 25, net: 150, status: 'approved', notes: 'Loan shortfall: AED 12.00 carried forward to next period.'
-    }], { period: '2026-11' });
-    assert(html.includes('Al Nakheel Contracting LLC'), 'company name missing');
-    assert(html.includes('Al Quoz'), 'company address missing');
-    assert(html.includes('EMP-9001'), 'staff no missing');
-    assert(html.includes('Indian') && html.includes('CONC'), 'nationality/trade missing');
-    assert(html.includes('8 h') && html.includes('2 h'), 'regular/OT hours missing');
-    assert(html.includes('37.50'), 'OT rate amount missing');
-    assert(html.includes('AED 275.00'), 'gross missing');
-    assert(html.includes('AED 100.00') && html.includes('AED 25.00'), 'deductions missing');
-    assert(html.includes('AED 150.00'), 'net missing');
-    assert(html.includes('Employee') && html.includes('Prepared by') && html.includes('Approved by'), 'signature lines missing');
-    assert(html.includes('Loan shortfall'), 'notes row missing');
-    assert(html.includes('dir="ltr"'), 'LTR direction missing');
+    SF.company.logo_data = 'data:image/png;base64,AAAA';
+    try {
+      const html = api.buildPrintHtml([{
+        worker_name: 'Alice Dsouza', staff_no: 'EMP-9001', nationality: 'Indian', trade: 'CONC', period: '2026-11',
+        days_worked: 2, reg_hours: 8, ot_hours: 2, hourly_rate: 25, ot_rate: 37.5, gross: 275,
+        loan_deduction: 100, other_deductions: 25, net: 150, status: 'approved', notes: 'Loan shortfall: AED 12.00 carried forward to next period.'
+      }], { period: '2026-11' });
+      assert(html.includes('Al Nakheel Contracting LLC'), 'company name missing');
+      assert(html.includes('Al Quoz'), 'company address missing');
+      assert(html.includes('<img src="data:image/png;base64,AAAA"'), 'company logo missing');
+      assert(html.includes('EMP-9001'), 'staff no missing');
+      assert(html.includes('Indian') && html.includes('CONC'), 'nationality/trade missing');
+      assert(html.includes('8 h') && html.includes('2 h'), 'regular/OT hours missing');
+      assert(html.includes('37.50'), 'OT rate amount missing');
+      assert(html.includes('AED 275.00'), 'gross missing');
+      assert(html.includes('AED 100.00') && html.includes('AED 25.00'), 'deductions missing');
+      assert(html.includes('AED 150.00'), 'net missing');
+      assert(html.includes('Employee') && html.includes('Prepared by') && html.includes('Approved by'), 'signature lines missing');
+      assert(html.includes('Loan shortfall'), 'notes row missing');
+      assert(html.includes('dir="ltr"'), 'LTR direction missing');
+    } finally {
+      SF.company.logo_data = null;
+    }
   });
   await test('Arabic print output is RTL and localised', () => {
     SF.language = 'ar';
@@ -666,6 +672,33 @@ async function headlessChecks() {
         tkAssert(print.single.includes('Employee') && print.single.includes('Prepared by') && print.single.includes('Approved by'), 'signature lines missing');
         eq((print.bulk.match(/class="slip"/g) || []).length, 2, 'bulk print contains both slips in one document');
         eq((print.bulk.match(/<!DOCTYPE html>/g) || []).length, 1, 'bulk print is a single document');
+      });
+
+      await test('headless: editing a negative hour in the preview clamps to 0 and warns', async () => {
+        await evaluate(`window.SF_modules.payslips._generate();true`);
+        await waitFor(`(function(){var s=window.SF_modules.payslips._state;return !!(s.preview && s.preview.length === 3 && document.getElementById('ps-gross-0'));})()`, { label: 'preview DOM' });
+        const edited = await evaluate(`(function(){
+          var input = document.querySelectorAll('input[aria-label="Reg hours"]')[0];
+          input.value = '-8';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          var line = window.SF_modules.payslips._state.preview[0];
+          return {
+            inputValue: input.value,
+            regHours: line.reg_hours,
+            gross: line.gross,
+            net: line.net,
+            warning: (document.getElementById('ps-warn-0') || {}).textContent || '',
+            grossCell: (document.getElementById('ps-gross-0') || {}).textContent || '',
+            totalNet: (document.getElementById('ps-tot-net') || {}).textContent || ''
+          };
+        })()`);
+        eq(edited.inputValue, '0', 'negative input reset to 0 in the field');
+        eq(edited.regHours, 0, 'line regular hours clamped');
+        eq(edited.gross, 75, 'recomputed gross keeps the 2h OT (2 × 37.50)');
+        eq(edited.net, 0, 'loan takes the remaining 75, net stays 0');
+        tkAssert(/clamped/i.test(edited.warning), 'warning badge missing after clamping: ' + edited.warning);
+        eq(edited.grossCell, 'AED 75.00', 'gross cell refreshed');
+        eq(edited.totalNet, 'AED 190.00', 'totals row refreshed (Bob 160 + Ghost 30)');
       });
 
       await test('headless: no JS exceptions across the full payslips workflow', async () => {

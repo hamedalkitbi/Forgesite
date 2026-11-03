@@ -129,7 +129,9 @@ async function staticChecks() {
     const source = readFileSync(MODULE_PATH, 'utf8');
     for (const needle of [
       'selectStrict', 'openFormModal', 'canManage', 'db.log', 'safeImgSrc', 'h.esc',
-      MIGRATION_FILE, 'actionButton(\'approve\'', 'win.opener = null', 'win.close()'
+      MIGRATION_FILE, 'actionButton(\'approve\'', 'win.opener = null', 'win.close()',
+      'registerApprovalsSource', 'registerApprovalsRefresh', "pendingStatus: 'submitted'",
+      "rejectionColumn: 'rejected_reason'"
     ]) {
       matches(source, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `module source missing ${needle}`);
     }
@@ -505,6 +507,131 @@ async function runViewChecks(kit) {
       assert(state.html.indexOf('data-pr-action="print"') >= 0, 'super should still be able to print');
       const errors = consoleErrors(app);
       assert(errors.length === 0, 'console errors while rendering: ' + errors.join(' | '));
+    });
+  });
+
+  await check('director: submitted requests appear in the Executive Approvals Queue and can be approved from it', async () => {
+    await runWithRole('director', async (app) => {
+      await app.goView('approvals');
+      await app.waitFor(async () => {
+        const html = await app.evaluate(`document.getElementById('main').innerHTML`);
+        return html.indexOf('PR-001') >= 0;
+      }, { label: 'submitted payment request inside the approvals queue' });
+      const queueHtml = await app.evaluate(`document.getElementById('main').innerHTML`);
+      assert(queueHtml.indexOf('PR-001') >= 0, 'submitted payment request PR-001 missing from the Executive Approvals Queue');
+      assert(/>PR</.test(queueHtml), 'queued payment request should carry the PR type tag');
+      // Approve through the app's own queue path (CAS on status='submitted').
+      await app.evaluate(`(async () => { await window.approveItem('payment_requests', ${JSON.stringify(SEED_ROWS[0].id)}); return true; })()`);
+      await app.waitFor(async () => {
+        const status = await app.evaluate(`((window.__MOCK_DB.payment_requests || []).filter(function(r){return r.id === ${JSON.stringify(SEED_ROWS[0].id)};})[0] || {}).status`);
+        return status === 'approved';
+      }, { label: 'queue approval to set status=approved' });
+      const stored = await app.evaluate(`((window.__MOCK_DB.payment_requests || []).filter(function(r){return r.id === ${JSON.stringify(SEED_ROWS[0].id)};})[0] || {})`);
+      assert(stored.status === 'approved', 'queue approval did not update the payment request status');
+      await app.goView('payment-requests');
+      await app.waitFor(async () => {
+        const state = await app.evaluate(VIEW_STATE_EXPRESSION);
+        return state.html.indexOf('data-pr-action="approve"') < 0 && state.html.indexOf('PR-001') >= 0;
+      }, { label: 'approved request to leave the submitted state in the module view' });
+      const errors = consoleErrors(app);
+      assert(errors.length === 0, 'console errors after queue approval: ' + errors.join(' | '));
+    });
+  });
+
+  await check('workflow: create → submit → reject (reason required) → resubmit → approve → pay', async () => {
+    await runWithRole('director', async (app) => {
+      const ev = app.evaluate;
+      const setVal = (id, value) => ev(`(() => {
+        var el = document.getElementById(${JSON.stringify(id)});
+        if (!el) return false;
+        el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`);
+      const clickRowAction = (reference, action) => ev(`(() => {
+        var rows = Array.from(document.querySelectorAll('#prTableBody tr'));
+        var row = rows.filter(function (r) { return r.textContent.indexOf(${JSON.stringify(reference)}) >= 0; })[0];
+        var button = row && row.querySelector('[data-pr-action="${action}"]');
+        if (button) { button.click(); return true; }
+        return false;
+      })()`);
+      const storedRow = (reference) => ev(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === ${JSON.stringify(reference)}; })[0] || {})`);
+
+      // CREATE through the real form (auto reference, filtered party dropdown)
+      await ev(`document.querySelector('[data-pr-action="create"]').click();true`);
+      await app.waitFor(`!!document.getElementById('f_reference')`, { label: 'create form' });
+      eq(await ev(`document.getElementById('f_reference').value`), 'PR-004', 'auto-generated reference');
+      assert((await ev(`Array.from(document.querySelectorAll('#f_party_id option')).some(function (o) { return o.textContent.indexOf('Rapid MEP') >= 0; })`)) === true,
+        'party dropdown must list the project subcontractors');
+      await setVal('f_description', 'Blockwork level 2');
+      await setVal('f_amount_aed', '333.33');
+      await setVal('f_retention_pct', '7.5');
+      await setVal('f_advance_recovery_aed', '10.55');
+      await setVal('f_due_date', '2026-12-01');
+      await ev(`document.getElementById('formSubmitBtn').click();true`);
+      await app.waitFor(`!document.getElementById('f_reference')`, { label: 'create form to close' });
+      await app.waitFor(`document.getElementById('main').innerHTML.includes('PR-004')`, { label: 'created row PR-004' });
+      const created = await storedRow('PR-004');
+      eq(Number(created.retention_aed), 25, 'created retention');
+      eq(Number(created.net_aed), 297.78, 'created net');
+      eq(created.status, 'draft', 'created status');
+      eq(created.requested_by, 'Hamed Al Kitbi', 'created requested_by');
+
+      // SUBMIT
+      assert(await clickRowAction('PR-004', 'submit'), 'submit button missing on draft');
+      await app.waitFor(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === 'PR-004'; })[0] || {}).status === 'submitted'`, { label: 'PR-004 submitted' });
+
+      // REJECT — an empty reason must be blocked, then the reason is stored
+      assert(await clickRowAction('PR-004', 'reject'), 'reject button missing on submitted');
+      await app.waitFor(`!!document.getElementById('prRejectBtn')`, { label: 'reject modal' });
+      await ev(`document.getElementById('prRejectBtn').click();true`);
+      const rejectError = await ev(`document.getElementById('prRejectErr').textContent`);
+      assert(/required|سبب/i.test(rejectError || ''), 'reject without a reason must be blocked: ' + rejectError);
+      await setVal('prRejectReason', 'Quantity not certified by consultant');
+      await ev(`document.getElementById('prRejectBtn').click();true`);
+      await app.waitFor(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === 'PR-004'; })[0] || {}).status === 'rejected'`, { label: 'PR-004 rejected' });
+      assert(/consultant/.test((await storedRow('PR-004')).rejected_reason || ''), 'rejection reason was not stored');
+
+      // RESUBMIT → APPROVE → PAY
+      await app.waitFor(`document.getElementById('main').innerHTML.includes('PR-004')`, { label: 'rejected row re-render' });
+      assert(await clickRowAction('PR-004', 'submit'), 'submit button missing on rejected');
+      await app.waitFor(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === 'PR-004'; })[0] || {}).status === 'submitted'`, { label: 'PR-004 resubmitted' });
+      assert(await clickRowAction('PR-004', 'approve'), 'approve button missing on resubmitted');
+      await app.waitFor(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === 'PR-004'; })[0] || {}).status === 'approved'`, { label: 'PR-004 approved' });
+      const approved = await storedRow('PR-004');
+      eq(approved.approved_by, 'Hamed Al Kitbi', 'approved_by recorded');
+      assert(!!approved.approved_at, 'approved_at recorded');
+      assert(await clickRowAction('PR-004', 'pay'), 'mark-paid button missing on approved');
+      await app.waitFor(`!!document.getElementById('f_payment_method')`, { label: 'pay form' });
+      await setVal('f_payment_method', 'Cheque');
+      await ev(`document.getElementById('formSubmitBtn').click();true`);
+      await app.waitFor(`((window.__MOCK_DB.payment_requests || []).filter(function (r) { return r.reference === 'PR-004'; })[0] || {}).status === 'paid'`, { label: 'PR-004 paid' });
+      const paid = await storedRow('PR-004');
+      eq(paid.payment_method, 'Cheque', 'payment method recorded');
+      assert(!!paid.paid_at, 'paid_at recorded');
+      const errors = consoleErrors(app);
+      assert(errors.length === 0, 'console errors during the workflow: ' + errors.join(' | '));
+    });
+  });
+
+  await check('missing table: view shows the migration filename + PostgREST error (no blank table)', async () => {
+    await kit.withApp({ role: 'director', project: 0 }, async (app) => {
+      app.diagnostics.clear();
+      await app.evaluate(`(() => {
+        window.SF.db.selectStrict = function () {
+          return Promise.resolve({ rows: [], error: { message: 'relation "public.payment_requests" does not exist', code: '42P01' } });
+        };
+        return true;
+      })()`);
+      await app.goView('payment-requests');
+      await app.waitFor(`document.getElementById('main').innerHTML.includes('202611031001_payment_requests.sql')`, { label: 'migration-hint error state' });
+      const html = await app.evaluate(`document.getElementById('main').innerHTML`);
+      assert(html.indexOf('202611031001_payment_requests.sql') >= 0, 'migration filename missing from the missing-table state');
+      assert(html.indexOf('does not exist') >= 0, 'PostgREST error text missing from the missing-table state');
+      assert(html.indexOf('<tbody') < 0, 'module must not render a table when the table is missing');
+      const errors = consoleErrors(app);
+      assert(errors.length === 0, 'console errors in the missing-table state: ' + errors.join(' | '));
     });
   });
 

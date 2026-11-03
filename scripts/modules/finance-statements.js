@@ -108,7 +108,13 @@
       totalReceivables: 'Total receivables',
       certifiedNet: 'Certified net payable',
       receivedToDate: 'Received to date',
-      outstandingInvoices: 'Certified certificates',
+      outstandingInvoices: 'Certified (open) certificates',
+      settlementRecon: 'Settlement reconciliation',
+      paidSettled: 'Paid certificates settled by status',
+      receiptsAppliedToPaid: 'Receipts applied to paid certificates',
+      receiptsAppliedToCertified: 'Receipts applied to certified invoices',
+      advanceReceipts: 'Unapplied receipts (client advances)',
+      arRule: 'Paid certificates are settled by status; recorded receipts are applied to paid certificates first, then to open certified invoices oldest-first.',
       overdue: 'Overdue',
       totalPayables: 'Total payables',
       approvedRequests: 'Approved payment requests',
@@ -186,7 +192,7 @@
       actual: 'Actual',
       variance: 'Variance',
       derivation: 'How these figures are derived',
-      derivationNote: 'AR = certified net payable − received payments. AP = approved payment requests + approved materials (net of paid supplier invoices) + pending supplier invoices. Cash = opening cash + received − paid supplier invoices − company expenses − paid payment requests. Retention and VAT payable come from certified certificates. Equity is derived as Assets − Liabilities, so the sheet balances by construction.',
+      derivationNote: 'AR = open certified net payable − receipts not already consumed by paid certificates (a paid certificate is settled by status). AP = approved payment requests + approved materials (net of paid supplier invoices) + pending supplier invoices. Cash = opening cash + received − paid supplier invoices − company expenses − paid payment requests. Retention and VAT payable come from certified certificates. Equity is derived as Assets − Liabilities, so the sheet balances by construction.',
       popupBlocked: 'Allow pop-ups to print the statements.',
       cashMovement: 'Net cash movement',
       periodResult: 'This-period revenue (excl. VAT)',
@@ -216,7 +222,13 @@
       totalReceivables: 'إجمالي المستحقات',
       certifiedNet: 'الصافي المعتمد المستحق',
       receivedToDate: 'المحصّل حتى تاريخه',
-      outstandingInvoices: 'الفواتير المعتمدة',
+      outstandingInvoices: 'الفواتير المعتمدة (المفتوحة)',
+      settlementRecon: 'تسوية التحصيل',
+      paidSettled: 'مستخلصات مدفوعة مسوّاة بالحالة',
+      receiptsAppliedToPaid: 'المحصّل المخصص للمستخلصات المدفوعة',
+      receiptsAppliedToCertified: 'المحصّل المخصص للفواتير المعتمدة',
+      advanceReceipts: 'مبالغ محصّلة غير مخصصة (دفعات مقدمة من العميل)',
+      arRule: 'المستخلص المدفوع يُعد مسوّى بحالته؛ ويُخصص المحصّل أولاً للمستخلصات المدفوعة ثم للفواتير المعتمدة المفتوحة من الأقدم إلى الأحدث.',
       overdue: 'المتأخرة',
       totalPayables: 'إجمالي الالتزامات',
       approvedRequests: 'طلبات دفع معتمدة',
@@ -294,7 +306,7 @@
       actual: 'الفعلي',
       variance: 'الفرق',
       derivation: 'كيفية احتساب هذه الأرقام',
-      derivationNote: 'المستحقات = صافي المستخلصات المعتمدة − المبالغ المحصّلة. الالتزامات = طلبات الدفع المعتمدة + المواد المعتمدة (بعد خصم فواتير الموردين المدفوعة) + فواتير الموردين المعلقة. النقد = النقد الافتتاحي + المحصّل − فواتير الموردين المدفوعة − مصروفات الشركة − طلبات الدفع المدفوعة. المحتجز والضريبة المستحقة من المستخلصات المعتمدة. حقوق الملكية = الأصول − الالتزامات، لذا تتوازن الميزانية بطريقة البناء.',
+      derivationNote: 'المستحقات = صافي المستخلصات المعتمدة المفتوحة − المبالغ المحصّلة غير المستخدمة في المستخلصات المدفوعة (المستخلص المدفوع مسوّى بحالته). الالتزامات = طلبات الدفع المعتمدة + المواد المعتمدة (بعد خصم فواتير الموردين المدفوعة) + فواتير الموردين المعلقة. النقد = النقد الافتتاحي + المحصّل − فواتير الموردين المدفوعة − مصروفات الشركة − طلبات الدفع المدفوعة. المحتجز والضريبة المستحقة من المستخلصات المعتمدة. حقوق الملكية = الأصول − الالتزامات، لذا تتوازن الميزانية بطريقة البناء.',
       popupBlocked: 'اسمح بالنوافذ المنبثقة لطباعة القوائم.',
       cashMovement: 'صافي الحركة النقدية',
       periodResult: 'إيرادات الفترة الحالية (بدون ضريبة)',
@@ -583,56 +595,106 @@
     return round2(age.d1_30 + age.d31_60 + age.d61_90 + age.d90plus);
   }
 
-  /* ---- AR ----------------------------------------------------------------- */
-  function arTotals(d) {
-    var bills = certifiedBillings(d);
-    var certifiedNet = round2(sum(bills, function (b) { return b.netPayable; }));
-    var received = sumAmounts(receivedPayments(d));
-    return {
-      ar: round2(certifiedNet - received),
-      certifiedNet: certifiedNet,
-      received: received,
-      count: bills.length
-    };
-  }
-  function arTotal(data, opts) {
-    return arTotals(normData(data));
-  }
-
-  /* FIFO-allocate customer receipts to certificates (oldest due date first),
-   * then age the residual outstanding. Over-receipts become a current-bucket
-   * credit row so the ageing total always equals AR. */
-  function arAgeingOf(d, opts) {
+  /* ---- AR -----------------------------------------------------------------
+   * Settlement rule (P2 review — see docs/modules/finance.md §2.1):
+   *   1. A certificate with status 'paid' is SETTLED BY STATUS: it is never an
+   *      outstanding receivable, never appears in the AR ageing and never
+   *      inflates the Overdue KPI (the app's IPC list already shows it as paid).
+   *   2. Receipts recorded in `payments` (type 'received') are first treated as
+   *      applied to paid certificates, up to their net payable. Any remaining
+   *      receipts are FIFO-allocated to open certified certificates (oldest due
+   *      date first).
+   *   3. Receipts left after every paid + certified certificate is covered are
+   *      unapplied client advances: AR is negative and they form a current-
+   *      bucket credit row so the ageing total always equals AR.
+   *
+   *   AR = Σ net_payable(status='certified')
+   *        − max(0, receipts − Σ net_payable(status='paid'))
+   *
+   * This removes the double count that occurred when an IPC was flipped to
+   * 'paid' AND the client receipt was also recorded in `payments`.
+   */
+  function arSettlement(d, opts) {
     opts = opts || {};
-    var bills = certifiedBillings(d).slice().sort(function (a, b) {
+    var certified = d.billings.filter(function (b) { return b.status === 'certified'; });
+    var paid = d.billings.filter(function (b) { return b.status === 'paid'; });
+    var certifiedNet = round2(sum(certified, function (b) { return b.netPayable; }));
+    var paidNet = round2(sum(paid, function (b) { return b.netPayable; }));
+    var receipts = sumAmounts(receivedPayments(d));
+    var receiptsAppliedToPaid = round2(Math.min(receipts, paidNet));
+    var pool = round2(receipts - receiptsAppliedToPaid);
+    var sorted = certified.slice().sort(function (a, b) {
       var da = dayIndex(a.due), db = dayIndex(b.due);
       if (da === null) return 1;
       if (db === null) return -1;
       return da - db;
     });
-    var received = sumAmounts(receivedPayments(d));
-    var remaining = received;
+    var remaining = pool;
     var rows = [];
-    bills.forEach(function (b) {
+    sorted.forEach(function (b) {
       var outstanding = round2(b.netPayable);
+      var applied = 0;
       if (remaining > 0) {
-        var applied = Math.min(remaining, Math.max(0, outstanding));
+        applied = Math.min(remaining, Math.max(0, outstanding));
         outstanding = round2(outstanding - applied);
         remaining = round2(remaining - applied);
       }
       rows.push({
         type: 'billing', id: b.id, reference: b.billingNo || '—', projectId: b.projectId,
-        status: b.status, amount: outstanding, total: b.netPayable,
-        applied: round2(b.netPayable - outstanding), due: b.due
+        status: 'certified', amount: outstanding, total: b.netPayable,
+        applied: round2(applied), due: b.due
       });
     });
-    if (remaining > 0.004) {
+    var advance = round2(Math.max(0, remaining));
+    if (advance > 0.004) {
       rows.push({
-        type: 'credit', id: null, reference: labelFor(currentLang(), 'receivedToDate'), projectId: null,
-        status: 'credit', amount: round2(-remaining), total: 0, applied: 0, due: opts.today || isoToday()
+        type: 'credit', id: null, reference: labelFor(opts.lang || 'en', 'receivedToDate'), projectId: null,
+        status: 'credit', amount: round2(-advance), total: 0, applied: 0, due: opts.today || isoToday()
       });
     }
-    return decorateAgeing(ageing(rows, opts));
+    return {
+      ar: round2(sum(rows, function (r) { return r.amount; })),
+      certifiedNet: certifiedNet,
+      paidNet: paidNet,
+      receipts: receipts,
+      receiptsAppliedToPaid: receiptsAppliedToPaid,
+      receiptsAppliedToCertified: round2(pool - advance),
+      advance: advance,
+      certifiedCount: certified.length,
+      paidCount: paid.length,
+      rows: rows
+    };
+  }
+  function arTotals(d) {
+    var s = arSettlement(d);
+    return {
+      ar: s.ar,
+      certifiedNet: s.certifiedNet,
+      paidNet: s.paidNet,
+      paidCount: s.paidCount,
+      received: s.receipts,
+      receiptsAppliedToPaid: s.receiptsAppliedToPaid,
+      receiptsAppliedToCertified: s.receiptsAppliedToCertified,
+      advance: s.advance,
+      count: s.certifiedCount
+    };
+  }
+  function arTotal(data, opts) {
+    return arTotals(normData(data));
+  }
+  function arAgeingOf(d, opts) {
+    opts = opts || {};
+    var s = arSettlement(d, opts);
+    var out = decorateAgeing(ageing(s.rows, opts));
+    out.certifiedNet = s.certifiedNet;
+    out.paidNet = s.paidNet;
+    out.receipts = s.receipts;
+    out.receiptsAppliedToPaid = s.receiptsAppliedToPaid;
+    out.receiptsAppliedToCertified = s.receiptsAppliedToCertified;
+    out.advance = s.advance;
+    out.certifiedCount = s.certifiedCount;
+    out.paidCount = s.paidCount;
+    return out;
   }
   function decorateAgeing(age) {
     var annotated = age.rows.map(function (x) {
@@ -891,7 +953,7 @@
       settings: settingsFor(d, opts),
       ar: arTotals(d),
       ap: apTotals(d),
-      arAgeing: arAgeingOf(d, { today: asOf }),
+      arAgeing: arAgeingOf(d, { today: asOf, lang: opts.lang }),
       apAgeing: apAgeingOf(d, { today: asOf }),
       bs: balanceSheetOf(d, { today: asOf, settings: opts.settings }),
       pnl: pnlOf(d, opts),
@@ -974,6 +1036,14 @@
         push(r.reference, projectCodeOf(fx, r.projectId), r.status, r.due || '', r.daysPastDue,
           bucketLabelFor(lang, r.bucket), r.total || '', r.applied, r.amount);
       });
+      push([]);
+      push(lab(lang, 'settlementRecon'));
+      push(lab(lang, 'certifiedNet'), fx.ar.certifiedNet);
+      push(lab(lang, 'paidSettled'), fx.ar.paidNet, fx.ar.paidCount);
+      push(lab(lang, 'receiptsAppliedToPaid'), fx.ar.receiptsAppliedToPaid);
+      push(lab(lang, 'receiptsAppliedToCertified'), fx.ar.receiptsAppliedToCertified);
+      push(lab(lang, 'advanceReceipts'), fx.ar.advance);
+      push(lab(lang, 'totalReceivables'), fx.ar.ar);
     } else if (tab === 'ap') {
       push(lab(lang, 'ageing'));
       push(lab(lang, 'bucket'), lab(lang, 'invoices'), lab(lang, 'amount'));
@@ -1072,7 +1142,7 @@
     var d = normData(data);
     var lang = opts.lang || currentLang();
     var isAr = lang === 'ar';
-    var fx = computeFromNorm(d, { today: opts.today || isoToday(), settings: opts.settings });
+    var fx = computeFromNorm(d, { today: opts.today || isoToday(), settings: opts.settings, lang: lang });
     var company = mapCompany(opts.company || {});
     var labk = function (k) { return labelFor(lang, k); };
     var sections = [];
@@ -1087,7 +1157,12 @@
       });
       sections.push('<h2>' + esc(labk('receivables')) + '</h2>' +
         printTable(arHead, arAgeRows, [labk('total'), fx.arAgeing.buckets.reduce(function (s, b) { return s + b.count; }, 0), money(fx.ar.total), '100.00%']) +
-        printTable([{ label: labk('billingNo') }, { label: labk('project') }, { label: labk('status') }, { label: labk('dueDate') }, { label: labk('daysPastDue'), align: 'r' }, { label: labk('bucket') }, moneyColumn(labk('netPayable')), moneyColumn(labk('applied')), moneyColumn(labk('outstanding'))], arDrill));
+        printTable([{ label: labk('billingNo') }, { label: labk('project') }, { label: labk('status') }, { label: labk('dueDate') }, { label: labk('daysPastDue'), align: 'r' }, { label: labk('bucket') }, moneyColumn(labk('netPayable')), moneyColumn(labk('applied')), moneyColumn(labk('outstanding'))], arDrill) +
+        '<div class="meta">' + esc(labk('settlementRecon')) + ': ' +
+        esc(labk('paidSettled')) + ' ' + money(fx.ar.paidNet) + ' (' + fx.ar.paidCount + ') · ' +
+        esc(labk('receiptsAppliedToPaid')) + ' ' + money(fx.ar.receiptsAppliedToPaid) + ' · ' +
+        esc(labk('receiptsAppliedToCertified')) + ' ' + money(fx.ar.receiptsAppliedToCertified) + ' · ' +
+        esc(labk('advanceReceipts')) + ' ' + money(fx.ar.advance) + '</div>');
     }
     if (tab === 'all' || tab === 'ap') {
       var apHead = [{ label: labk('bucket') }, { label: labk('invoices'), align: 'r' }, moneyColumn(labk('amount')), { label: labk('pctOfTotal'), align: 'r' }];
@@ -1320,13 +1395,20 @@
         '<td class="tright mono"><b>' + money(r.amount) + '</b></td>' +
         '</tr>';
     });
+    var recon = '<div class="mutc" style="font-size:11px;line-height:1.7;margin-top:10px">' +
+      '<b>' + esc(pick('settlementRecon')) + '</b>: ' +
+      esc(pick('paidSettled')) + ' ' + money0(ar.paidNet) + ' (' + ar.paidCount + ') · ' +
+      esc(pick('receiptsAppliedToPaid')) + ' ' + money0(ar.receiptsAppliedToPaid) + ' · ' +
+      esc(pick('receiptsAppliedToCertified')) + ' ' + money0(ar.receiptsAppliedToCertified) + ' · ' +
+      esc(pick('advanceReceipts')) + ' ' + money0(ar.advance) +
+      '<br>' + esc(pick('arRule')) + '</div>';
     return kpis + ageingCard(age, ar.ar) +
       '<div class="card" style="margin-top:14px"><h3>' + esc(pick('customerReceivables')) + '</h3>' +
       tableHTML([
         { label: pick('billingNo') }, { label: pick('project') }, { label: pick('status') }, { label: pick('dueDate') },
         { label: pick('daysPastDue'), cls: 'tright' }, { label: pick('bucket') }, { label: pick('netPayable'), cls: 'tright' },
         { label: pick('applied'), cls: 'tright' }, { label: pick('outstanding'), cls: 'tright' }
-      ], rows, pick('noData')) + '</div>';
+      ], rows, pick('noData')) + recon + '</div>';
   }
 
   function apTab(fx) {
@@ -1502,7 +1584,7 @@
   }
 
   function buildView() {
-    var fx = compute(MOD.data || {}, { today: MOD.asOf || todayStr(), settings: MOD.settingsRow });
+    var fx = compute(MOD.data || {}, { today: MOD.asOf || todayStr(), settings: MOD.settingsRow, lang: currentLang() });
     var tabs = [
       { key: 'ar', label: pick('tab_ar') }, { key: 'ap', label: pick('tab_ap') },
       { key: 'bs', label: pick('tab_bs') }, { key: 'pnl', label: pick('tab_pnl') }
@@ -1595,7 +1677,7 @@
   function exportCurrent() {
     try {
       if (!MOD.data) { UI.toast(pick('loading')); return; }
-      var fx = compute(MOD.data, { today: MOD.asOf || todayStr(), settings: MOD.settingsRow });
+      var fx = compute(MOD.data, { today: MOD.asOf || todayStr(), settings: MOD.settingsRow, lang: currentLang() });
       var rows = csvRowsFor(MOD.tab, fx, currentLang());
       downloadCSV('finance_' + MOD.tab + '_' + fx.asOf + '.csv', rows);
       UI.toast('Exported ✓', 'ok');
