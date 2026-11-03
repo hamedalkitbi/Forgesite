@@ -15,6 +15,6 @@
     "screenshots": "node tools/screenshots.mjs && node tools/screenshots-modules.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

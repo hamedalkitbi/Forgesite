@@ -1,7 +1,7 @@
 // Minimal Chrome DevTools Protocol driver. Zero npm dependencies (Node >= 20 global WebSocket).
 // Used by tools/smoke.mjs, tools/run-tests.mjs and tools/make-icons.mjs.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, openSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
@@ -60,9 +60,15 @@ export async function launchChrome({ port, profileDir } = {}) {
   const debugPort = port || (await freePort());
   const profile = profileDir || mkdtempSync(join(tmpdir(), 'forgesite-chrome-'));
   const logPath = join(profile, 'chrome.log');
+  // CI runners are slow to bring Chromium up (dbus probes, image layers); be patient.
+  const startupTimeout = Number(process.env.CHROME_STARTUP_TIMEOUT_MS || 60000);
   const args = [
     '--headless=new',
     '--no-sandbox',
+    '--disable-dbus',
+    '--disable-component-update',
+    '--disable-default-apps',
+    '--disable-sync',
     '--disable-gpu',
     '--disable-software-rasterizer',
     '--disable-dev-shm-usage',
@@ -80,13 +86,24 @@ export async function launchChrome({ port, profileDir } = {}) {
     'about:blank'
   ];
   const out = openSync(logPath, 'a');
-  const proc = spawn(binary, args, { stdio: ['ignore', out, out] });
+  const proc = spawn(binary, args, {
+    stdio: ['ignore', out, out],
+    // Not having a session bus makes Chromium probe dbus for ~20s on CI.
+    env: Object.assign({}, process.env, { DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || '/dev/null' })
+  });
   proc.on('error', () => {});
 
-  await waitFor(async () => {
-    const res = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
-    return res.ok;
-  }, { label: 'Chrome devtools endpoint', timeout: 25000 });
+  try {
+    await waitFor(async () => {
+      const res = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+      return res.ok;
+    }, { label: 'Chrome devtools endpoint', timeout: startupTimeout });
+  } catch (error) {
+    let tail = '';
+    try { tail = readFileSync(logPath, 'utf8').split('\n').slice(-6).join('\n'); } catch { /* no log */ }
+    try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+    throw new Error(`${error.message} after ${startupTimeout}ms (set CHROME_STARTUP_TIMEOUT_MS to raise). Chrome log tail:\n${tail}`);
+  }
 
   return {
     proc,

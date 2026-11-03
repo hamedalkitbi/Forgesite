@@ -125,7 +125,7 @@ Notes:
 
 ## Testing
 
-The suite is dependency-free (Node ≥ 20 + a local Chrome/Chromium); it starts its
+The suite is dependency-free (Node ≥ 22 + a local Chrome/Chromium); it starts its
 own static server and a headless browser over the DevTools Protocol, then cleans up.
 
 ```bash

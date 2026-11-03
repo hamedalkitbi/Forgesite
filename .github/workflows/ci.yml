@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: HTMLHint
         run: npx --yes htmlhint@1 "index.html"
@@ -26,14 +26,16 @@ jobs:
   test:
     name: Headless test suite
     runs-on: ubuntu-latest
+    env:
+      CHROME_STARTUP_TIMEOUT_MS: '90000'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # google-chrome is preinstalled on ubuntu-latest runners; tools/lib/cdp.mjs
-      # finds it at /usr/bin/google-chrome.
+      # finds it at /usr/bin/google-chrome. CI images can take ~30s to start it.
       - name: Run tests
         run: node tools/run-tests.mjs
 
