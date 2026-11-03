@@ -1,3 +1,14 @@
+#!/usr/bin/env python3
+"""
+HISTORICAL — DO NOT RUN against the refactored repository.
+
+This script was part of the pre-refactor patch workflow. It takes a
+filename from sys.argv[1], then decodes Unicode escape sequences in that
+file and writes it back in place. It contains no literal reference to
+index.html / styles/ / scripts/, so callers may use it on any of those
+files; nevertheless, it targets pre-refactor content assumptions and
+should only be kept as historical reference.
+"""
 import io, re, sys
 p = sys.argv[1]
 s = io.open(p, encoding='utf-8').read()
