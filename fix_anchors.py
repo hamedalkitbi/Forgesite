@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-HISTORICAL — verify against the refactored repository before running.
+HISTORICAL — DO NOT RUN against the refactored repository.
 
-This script was part of the pre-refactor patch workflow. It contains no
-literal reference to index.html / styles/ / scripts/ paths, so it may
-or may not still apply cleanly depending on what it actually targets.
-Do not run it without first inspecting the source and testing against
-a copy of the current tree.
+This script was part of the pre-refactor patch workflow. It takes a
+filename from sys.argv[1], then decodes Unicode escape sequences in that
+file and writes it back in place. It contains no literal reference to
+index.html / styles/ / scripts/, so callers may use it on any of those
+files; nevertheless, it targets pre-refactor content assumptions and
+should only be kept as historical reference.
 """
 import io, re, sys
 p = sys.argv[1]
