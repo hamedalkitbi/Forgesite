@@ -1,20 +1,53 @@
--- Forgesite: PO approval metadata + site-report photo storage
+-- Forgesite: approval columns, missing status columns, site-report photo storage
 --
--- Run this once in the Supabase SQL editor (Dashboard -> SQL -> New query).
--- Safe to re-run: every statement is idempotent.
+-- Run this ONCE in the Supabase SQL editor (Dashboard -> SQL -> New query).
+-- Safe to re-run: every statement is idempotent and no data is deleted.
 --
 -- What it does
---   1. Records WHO approved/rejected BOQ items, POs (materials), change orders and
---      expenses, and when, plus a rejection reason. Before this the app only stored
---      status='approved'|'rejected', so the signatory lived only in the audit trail.
---   2. Ensures site_reports.photos is a JSONB array (the app now stores storage paths,
+--   1. Adds the `status` column to tables that may predate it (materials / POs,
+--      BOQ items, change orders, timesheets, company expenses). The app has always
+--      sent `status` on insert and read it for the approvals queue, but on an older
+--      database the column was missing and the app's unknown-column tolerance
+--      silently dropped it — which is why PO/CO approvals never persisted.
+--      Existing rows are backfilled to 'approved' (they are historical) so the
+--      approval queue only fills with new work.
+--   2. Records WHO approved/rejected BOQ items, POs (materials), change orders and
+--      expenses, and when, plus a rejection reason.
+--   3. Ensures site_reports.photos is a JSONB array (the app stores storage paths,
 --      e.g. [{"name":"IMG_1.jpg","path":"<project>/site-reports/<id>/..."}]).
---   3. Ensures the private "siteforge-files" storage bucket exists with policies that
+--   4. Ensures the private "siteforge-files" storage bucket exists with policies that
 --      let signed-in users read and let directors/controllers/supers write.
 --
--- Rollback (optional): the added columns can be dropped with
+-- Rollback (optional):
 --   alter table public.materials drop column if exists approved_by, ... ;
--- Removing them only reverts the UI extras; no existing data is modified.
+--   The status columns added here are harmless if left in place.
+--
+-- ---------------------------------------------------------------------------
+-- 0. status columns (root cause of approvals never persisting)
+-- ---------------------------------------------------------------------------
+alter table public.materials         add column if not exists status text;
+alter table public.boq_items         add column if not exists status text;
+alter table public.change_orders     add column if not exists status text;
+alter table public.timesheets        add column if not exists status text;
+alter table public.company_expenses  add column if not exists status text;
+
+-- Historical rows are treated as already certified.
+update public.materials         set status = 'approved' where status is null;
+update public.boq_items         set status = 'approved' where status is null;
+update public.change_orders     set status = 'approved' where status is null;
+update public.timesheets        set status = 'approved' where status is null;
+update public.company_expenses  set status = 'approved' where status is null;
+
+-- New rows created by the app always send an explicit status; these defaults only
+-- apply to rows created outside the app (SQL/CSV/automation).
+--   POs and change orders default to pending so nothing bypasses approval.
+--   BOQ imports / timesheets / expenses default to approved (imports are done by
+--   managers and would otherwise flood the queue line by line).
+alter table public.materials         alter column status set default 'pending';
+alter table public.change_orders     alter column status set default 'pending';
+alter table public.boq_items         alter column status set default 'approved';
+alter table public.timesheets        alter column status set default 'approved';
+alter table public.company_expenses  alter column status set default 'approved';
 
 -- ---------------------------------------------------------------------------
 -- 1. Approval metadata (idempotent)
@@ -39,7 +72,8 @@ alter table public.timesheets       add column if not exists approved_by text;
 alter table public.timesheets       add column if not exists approved_at timestamptz;
 alter table public.timesheets       add column if not exists rejection_reason text;
 
--- Fast lookup for the approvals queue (pending per project).
+-- Fast lookup for the approvals queue (pending per project). Safe now that
+-- `status` is guaranteed to exist by section 0.
 create index if not exists materials_project_status_idx     on public.materials(project_id, status);
 create index if not exists boq_items_project_status_idx     on public.boq_items(project_id, status);
 create index if not exists change_orders_project_status_idx on public.change_orders(project_id, status);
@@ -115,3 +149,6 @@ end $$;
 
 comment on column public.site_reports.photos is
   'Array of {name, path, size} objects stored in the siteforge-files bucket; legacy rows may contain {name, data}.';
+
+-- Ask PostgREST to pick up the new columns/tables immediately.
+notify pgrst, 'reload schema';
