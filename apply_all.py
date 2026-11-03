@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
 """
+HISTORICAL — DO NOT RUN against the refactored repository.
+
+These patches were applied on 2026-11-03 to the pre-refactor single-file
+index.html. After the asset split (commit c61842ab04d10c83a2544e2b36e0e3a5df017fb4), the anchors this
+script targets — notably the JS injections such as `var d=await r.json();`
+(see line ~209) — now live in scripts/app.js and styles/main.css, not
+index.html. Running this against the current tree will not apply
+cleanly and will produce a partially-patched file.
+
+Kept for historical reference only.
+"""
+"""
 SiteForge ERP v28 -> v28.2  (18 exact-anchor patches, one file)
 
   A1-A11  v28.1 : date/time helpers, permission gate, slider, profiles.active,
