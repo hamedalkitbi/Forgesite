@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="SiteForge ERP - field-to-office construction cost certification: BOQ, progress billing, payroll, approvals and site reports.">
+<meta name="theme-color" content="#0b0f14">
+<meta name="color-scheme" content="dark light">
 <title>SiteForge ERP v28</title>
+<link rel="manifest" href="site.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://cdn.sheetjs.com" crossorigin>
+<link rel="dns-prefetch" href="https://unpkg.com">
+<link rel="dns-prefetch" href="https://dxopfnsvslvqunaptzgp.supabase.co">
 <link rel="stylesheet" href="styles/main.css">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" crossorigin="anonymous" onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';document.head.appendChild(s);"></script>
@@ -74,5 +84,18 @@
 <div id="modalRoot" role="dialog" aria-modal="true"></div>
 
 <script src="scripts/app.js"></script>
+<noscript><p style="padding:24px;font-family:system-ui,sans-serif">SiteForge ERP needs JavaScript enabled to run.</p></noscript>
+<script>
+/* Offline app shell: register the service worker on https or localhost. Add ?nosw=1 to disable. */
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  if (/[?&]nosw=1/.test(location.search)) return;
+  var secure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!secure) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(function () {});
+  });
+})();
+</script>
 </body>
 </html>

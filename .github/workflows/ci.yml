@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint and syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: HTMLHint
+        run: npx --yes htmlhint@1 "index.html"
+
+      - name: JS syntax
+        run: |
+          node --check scripts/app.js
+          node --check sw.js
+
+  test:
+    name: Headless test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # google-chrome is preinstalled on ubuntu-latest runners; tools/lib/cdp.mjs
+      # finds it at /usr/bin/google-chrome.
+      - name: Run tests
+        run: node tools/run-tests.mjs
+
+      - name: Upload Chrome log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-logs
+          path: |
+            /tmp/forgesite-chrome-*/chrome.log
+          if-no-files-found: ignore

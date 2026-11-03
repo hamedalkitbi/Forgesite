@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SiteForge">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111a24"/>
+      <stop offset="1" stop-color="#080c11"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.25" cy="0.12" r="0.8">
+      <stop offset="0" stop-color="#ff8c1a" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ff8c1a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd7ae"/>
+      <stop offset="0.55" stop-color="#ff8c1a"/>
+      <stop offset="1" stop-color="#d96a08"/>
+    </linearGradient>
+    <linearGradient id="grip" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f7fbff"/>
+      <stop offset="0.6" stop-color="#dde6ef"/>
+      <stop offset="1" stop-color="#93a4b6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#glow)"/>
+  <g transform="rotate(-8 256 280)">
+    <!-- handle -->
+    <rect x="241" y="140" width="30" height="288" rx="15" fill="url(#grip)"/>
+    <rect x="262" y="150" width="9" height="270" rx="4" fill="#5d6e80" opacity="0.35"/>
+    <!-- pickaxe head: crescent blade with pointed tips -->
+    <path d="M112 232
+             C 152 148, 216 112, 256 112
+             C 296 112, 360 148, 400 232
+             C 348 166, 300 144, 256 144
+             C 212 144, 164 166, 112 232 Z"
+          fill="url(#metal)"/>
+  </g>
+</svg>

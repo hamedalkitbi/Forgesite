@@ -3116,5 +3116,20 @@ initSupabase();
 setTimeout(function(){if(!supabase)initSupabase();},1000);
 window.addEventListener('offline',function(){toast('⚠ You are offline — changes will not save until reconnected','bad');});
 window.addEventListener('online',function(){toast('Back online ✓','ok');});
+
+/* Test surface: exposes pure helpers ONLY when opened with ?selftest=1, so production
+   globals stay untouched. Used by tools/run-tests.mjs to assert real behavior. */
+if(/[?&]selftest=1/.test(location.search)){
+  window.__sf={
+    money:money,money0:money0,num:num,numOr:numOr,esc:esc,
+    toLocalDate:toLocalDate,fmtDate:fmtDate,fmtTime:fmtTime,daysUntil:daysUntil,today:today,
+    safeImgSrc:safeImgSrc,safeSpreadsheetCell:safeSpreadsheetCell,genUUID:genUUID,
+    approvalKey:typeof approvalKey==='function'?approvalKey:null,
+    workerTakeHome:typeof workerTakeHome==='function'?workerTakeHome:null,
+    parseWorkerPay:typeof parseWorkerPay==='function'?parseWorkerPay:null,
+    computeIpcPreview:typeof computeIpcPreview==='function'?computeIpcPreview:null,
+    getBoqActualsMap:typeof getBoqActualsMap==='function'?getBoqActualsMap:null
+  };
+}
 console.log('[SiteForge v28] ready');
 })();
