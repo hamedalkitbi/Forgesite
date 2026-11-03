@@ -3431,6 +3431,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
+  version:'v29.2',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3444,5 +3445,5 @@ Object.defineProperty(window.SF,'currentProjectId',{get:function(){return state.
 Object.defineProperty(window.SF,'parties',{get:function(){return state.parties||[];}});
 Object.defineProperty(window.SF,'language',{get:function(){return appSettings.language;}});
 
-console.log('[SiteForge v28] ready');
+console.log('[SiteForge v29.2] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
