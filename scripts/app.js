@@ -285,6 +285,18 @@ async function fetchAllRows(table,filters,orderCol,ascending){
   return all;
 }
 
+/* Strict variant used by optional feature modules: returns the PostgREST error so a
+   module can say "run the migration" instead of rendering a misleading empty state. */
+async function fetchRowsStrict(table,filters,orderCol,ascending){
+  if(!supabase)return {rows:[],error:new Error('Supabase client not ready')};
+  var q=supabase.from(table).select('*');
+  if(filters)Object.keys(filters).forEach(function(k){if(filters[k]!==undefined&&filters[k]!==null)q=q.eq(k,filters[k]);});
+  if(orderCol)q=q.order(orderCol,{ascending:ascending!==false});
+  var r=await q;
+  if(r&&r.error)return {rows:[],error:r.error};
+  return {rows:(r&&r.data)||[],error:null};
+}
+
 async function loadCompanyData(){
   if(!supabase)return;
   var c=await supabase.from('companies').select('*').order('created_at').limit(1);
@@ -306,7 +318,7 @@ async function loadCompanyData(){
 function mapProjectTable(table,rows){
   if(table==='budget_lines')state.budget=rows.map(function(x){return {id:x.id,code:x.code,desc:x.description,cat:x.category,trade:x.trade,budget:Number(x.budget_aed)||0,actual:Number(x.actual_aed)||0,evPct:Number(x.ev_pct)||0,pvPct:Number(x.pv_pct)||0};});
   else if(table==='timesheets')state.timesheets=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,name:x.employee_name,trade:x.trade,date:x.work_date,hours:Number(x.total_hours)||0,regHours:Number(x.reg_hours)||0,otHours:Number(x.ot_hours)||0,rate:Number(x.rate_aed)||0,cost:Number(x.total_cost_aed)||0,status:x.status,approvedBy:x.approved_by};});
-  else if(table==='materials')state.materials=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,po:x.po_number,invoiceNo:x.invoice_no,supplier:x.supplier,trade:x.trade,desc:x.description,qty:Number(x.quantity)||0,unit:x.unit,unitCost:Number(x.unit_cost_aed)||0,stage:x.stage,date:x.invoice_date,source:x.source,status:x.status||'approved'};});
+  else if(table==='materials')state.materials=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,po:x.po_number,invoiceNo:x.invoice_no,supplier:x.supplier,trade:x.trade,desc:x.description,qty:Number(x.quantity)||0,unit:x.unit,unitCost:Number(x.unit_cost_aed)||0,stage:x.stage,date:x.invoice_date,source:x.source,status:x.status||'approved',approvedBy:x.approved_by||null,approvedAt:x.approved_at||null,rejectionReason:x.rejection_reason||null};});
   else if(table==='payroll_batches')state.payroll=rows.map(function(x){return {id:x.id,ts:new Date(x.certified_at).getTime(),period:x.period,count:x.worker_count,gross:Number(x.gross_aed)||0,net:Number(x.net_aed)||0};});
   else if(table==='audit_log')state.audit=rows.map(function(x){return {id:x.id,ts:new Date(x.ts).getTime(),user:x.user_name,role:x.user_role,action:x.action,detail:x.detail};});
   else if(table==='boq_items')state.boq=rows.map(function(x){return {id:x.id,section:x.section,code:x.code,desc:String(x.description||''),unit:x.unit,qty:Number(x.quantity)||0,rate:Number(x.rate)||0,status:x.status||'approved'};});
@@ -407,7 +419,12 @@ window.switchProject=async function(pid){
     if(state.currentProject){refreshProjSelector();render();}
   }
 };
-function hasView(v){return userProfile&&(PERMS[userProfile.role]||[]).indexOf(v)>=0;}
+function hasView(v){
+  if(!userProfile)return false;
+  if((PERMS[userProfile.role]||[]).indexOf(v)>=0)return true;
+  var mod=window.SFviews&&window.SFviews[v];
+  return !!(mod&&(mod.roles||[]).indexOf(userProfile.role)>=0);
+}
 
 function getBoqActualsMap(){
   var actualMap={};
@@ -476,8 +493,13 @@ function render(){
   renderTop();renderSidebar();
   var m=document.getElementById('main');m.innerHTML='';
   var v=currentView;
-  if(!state.currentProjectId&&['project-dash','boq','drawings','timeline','materials','payments','parties','change-orders','timesheets','payroll','audit','reports','progress-billing','site-reports'].indexOf(v)>=0){v='company-dash';currentView='company-dash';}
+  var needsProject=['project-dash','boq','drawings','timeline','materials','payments','parties','change-orders','timesheets','payroll','audit','reports','progress-billing','site-reports'].indexOf(v)>=0;
+  var modDef=(window.SFviews||{})[v];
+  if(modDef&&modDef.nav&&modDef.nav.section==='project')needsProject=true;
+  if(!state.currentProjectId&&needsProject){v='company-dash';currentView='company-dash';}
   if(!hasView(v)){var _ord=(state.currentProjectId?['project-dash','site-reports','boq','drawings','progress-billing','timeline','materials','payments','parties','change-orders','timesheets','payroll','audit','reports','approvals']:['company-dash','projects-list','expenses','company-budget','workers','compliance','approvals']).concat(['settings','history']);for(var _i=0;_i<_ord.length;_i++){if(hasView(_ord[_i])){v=_ord[_i];currentView=v;break;}}}
+  var mod=(window.SFviews||{})[v];
+  if(mod&&typeof mod.render==='function'){mod.render(m);nameIconButtons(document.body);return;}
   switch(v){
     case 'company-dash':renderCompanyDash(m);break;
     case 'projects-list':renderProjectsList(m);break;
@@ -578,6 +600,18 @@ function renderSidebar(){
       h+=nb('approvals','🛡️','Approvals Queue',pc?'<span class="badge" style="background:var(--warn)">'+pc+'</span>':'');
     }
   }
+  /* Module views (scripts/modules/*.js) inject their nav entries here. */
+  (function(){
+    var items=(window.SF&&SF.navItems)?SF.navItems(state.currentProjectId?'project':'company'):[];
+    items.forEach(function(it){
+      if(!userProfile)return;
+      var roles=it.roles||[];
+      if(roles.length&&roles.indexOf(userProfile.role)<0)return;
+      var nav=it.nav||{};
+      var label=(appSettings.language==='ar'&&nav.labelAr)?nav.labelAr:nav.label;
+      h+=nb(it.id,nav.icon||'\u2022',label,'');
+    });
+  })();
   h+='<div class="navsec">'+t('system')+'</div>';
   if(hasView('settings'))h+=nb('settings','⚙',t('settings'));
   if(hasView('users'))h+=nb('users','👥',t('userMgmt'));
@@ -2275,9 +2309,15 @@ function packWorkerNotes(d){
   var body=String(d.notes||'').replace(/^<!--sfpay:[\s\S]*?-->\n?/,'');
   return '<!--sfpay:'+JSON.stringify({salary:Number(d.salary_aed)||0,loan:Number(d.loan_balance)||0,deduct:Number(d.loan_deduction)||0})+'-->\n'+body;
 }
+function round2(v){return Math.round((Number(v)||0)*100)/100;}
 function workerTakeHome(pay){
-  var deduct=Math.min(Math.max(0,Number(pay.deduct)||0), Math.max(0,Number(pay.loan)||0));
-  return {deduct:deduct,salaryNet:Math.max(0,(Number(pay.salary)||0)-deduct),remaining:Math.max(0,(Number(pay.loan)||0)-deduct)};
+  var salary=Math.max(0,Number(pay.salary)||0);
+  var loan=Math.max(0,Number(pay.loan)||0);
+  var want=Math.max(0,Number(pay.deduct)||0);
+  // A deduction can never exceed the outstanding loan OR the salary itself; the
+  // shortfall carries forward instead of silently over-recovering principal.
+  var deduct=round2(Math.min(want,loan,salary));
+  return {deduct:deduct,salaryNet:round2(salary-deduct),remaining:round2(Math.max(0,loan-deduct)),shortfall:round2(Math.max(0,want-deduct))};
 }
 function workerFormValues(w){
   var p=parseWorkerPay(w.notes);
@@ -2504,8 +2544,54 @@ function renderSiteReports(el){
     return '<tr><td class="mono">'+fmtDate(r.report_date)+'</td><td><b>'+esc(r.title||'Untitled')+'</b></td><td>'+esc(r.weather||'—')+'</td><td class="tright">'+(photos.length?'<span class="tag info">'+photos.length+'</span>':'—')+'</td><td class="tright" style="white-space:nowrap"><button class="btn ghost sm" onclick="viewSiteReport(\''+esc(r.id)+'\')">👁</button>'+(canEdit?' <button class="btn ghost sm" onclick="editSiteReport(\''+esc(r.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteSiteReport(\''+esc(r.id)+'\')">✕</button>':'')+'</td></tr>';
   }).join(''):'<tr><td colspan="5" class="empty"><div class="big">📸</div>'+t('noData')+'</td></tr>')+'</tbody></table></div></div>';
 }
+/* Report photos live in Supabase Storage (bucket: siteforge-files) under
+   <project>/site-reports/<reportId>/<file>. Rows keep [{name,path,size}]; rows saved
+   by older builds with inline {data:dataURL} still render. */
+var _photoUrlCache={};
+async function reportPhotoUrl(p){
+  if(!p)return '';
+  if(p.preview)return p.preview;
+  if(p.data){var d=safeImgSrc(p.data);if(d)return d;}
+  if(!p.path)return '';
+  if(_photoUrlCache[p.path])return _photoUrlCache[p.path];
+  try{
+    var r=await supabase.storage.from('siteforge-files').createSignedUrl(p.path,3600);
+    if(r.error||!r.data||!r.data.signedUrl)return '';
+    _photoUrlCache[p.path]=r.data.signedUrl;return r.data.signedUrl;
+  }catch(e){return '';}
+}
+async function fillPhotoThumbs(container,photos,onclickFn){
+  if(!container)return;
+  container.innerHTML=photos.map(function(p,i){return '<div class="photo-thumb" data-i="'+i+'"'+(onclickFn?' onclick="'+onclickFn+'('+i+')"':'')+'><img alt="Photo '+(i+1)+'" src=""></div>';}).join('');
+  for(var i=0;i<photos.length;i++){
+    var u=await reportPhotoUrl(photos[i]);
+    var cell=container.querySelector('[data-i="'+i+'"]');
+    if(!cell)continue;
+    if(u){var img=cell.querySelector('img');if(img)img.src=u;}else{cell.style.display='none';}
+  }
+}
+async function uploadReportPhotos(reportId,errEl){
+  var list=window._reportPhotos||[];var out=[];
+  for(var i=0;i<list.length;i++){
+    var p=list[i];
+    if(p.path){out.push({name:p.name,path:p.path,size:p.size||null});continue;}
+    if(!p.blob)continue;
+    var fname=String(p.name||'photo.jpg').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-60);
+    var path=state.currentProjectId+'/site-reports/'+reportId+'/'+Date.now()+'_'+i+'_'+fname;
+    var up;
+    try{up=await supabase.storage.from('siteforge-files').upload(path,p.blob,{upsert:false,contentType:'image/jpeg'});}catch(e){up={error:e};}
+    if(!up||up.error){
+      var msg=(up&&up.error&&(up.error.message||up.error))||'upload failed';
+      if(errEl)errEl.textContent='✗ Photo "'+(p.name||(i+1))+'" could not be uploaded — report not saved. '+msg+' (check the siteforge-files bucket and its storage policies)';
+      return null;
+    }
+    var stored=(up.data&&(up.data.path||up.data.fullPath))||path;
+    out.push({name:p.name,path:stored,size:p.size||null});
+  }
+  return out;
+}
 window.newSiteReport=function(){
-  window._reportPhotos=[];
+  window._reportPhotos=[];window._editingReportId=null;
   openModal('📸 '+t('newSiteReport'),
     '<div class="fgrid"><div class="field"><label>'+t('date')+'</label><input id="sr_date" type="date" value="'+today()+'"></div><div class="field"><label>Weather</label><select id="sr_weather"><option>Sunny</option><option>Cloudy</option><option>Rainy</option><option>Windy</option><option>Hot</option><option>Hazy</option></select></div><div class="field full"><label>Title</label><input id="sr_title"></div><div class="field"><label>Workers</label><input id="sr_wf" type="number" min="0" value="0"></div><div class="field"><label>Temp (°C)</label><input id="sr_temp" type="number" min="0" value="30"></div><div class="field full"><label>Activities</label><textarea id="sr_act" rows="3"></textarea></div><div class="field full"><label>Issues</label><textarea id="sr_iss" rows="2"></textarea></div><div class="field full"><label>Safety</label><textarea id="sr_safety" rows="2"></textarea></div></div>'+
     '<div style="margin-top:14px"><label style="font-size:10.5px;text-transform:uppercase;color:var(--muted);font-weight:800;display:block;margin-bottom:6px">Photos</label><div class="dropzone" onclick="document.getElementById(\'sr_photos\').click()"><input type="file" id="sr_photos" accept="image/*" multiple style="display:none" onchange="handleReportPhotos(event)"><div style="font-size:24px">📷</div><div style="font-size:12px">Add photos</div></div><div class="photo-grid" id="sr_photo_grid"></div></div>'+
@@ -2515,42 +2601,61 @@ window.newSiteReport=function(){
 window.handleReportPhotos=function(ev){
   var files=ev.target.files;if(!files||!files.length)return;
   Array.from(files).forEach(function(f){
-    if(f.size>10*1024*1024){toast(f.name+' too large (max 10MB)','bad');return;}
+    if(f.size>10*1024*1024){toast('✗ '+f.name+' too large (max 10MB)','bad');return;}
     var rd=new FileReader();
     rd.onload=function(e){
       var img=new Image();
       img.onload=function(){
         var canvas=document.createElement('canvas');
-        var MAX_W=1000;
+        var MAX_W=1200;
         var scale=img.width>MAX_W?(MAX_W/img.width):1;
         canvas.width=Math.round(img.width*scale);
         canvas.height=Math.round(img.height*scale);
-        var ctx=canvas.getContext('2d');
-        ctx.drawImage(img,0,0,canvas.width,canvas.height);
-        var compressed=canvas.toDataURL('image/jpeg',0.72);
-        window._reportPhotos.push({name:f.name,data:compressed});
-        renderReportPhotoGrid();
+        canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+        canvas.toBlob(function(blob){
+          if(!blob){toast('✗ Could not process '+f.name,'bad');return;}
+          window._reportPhotos.push({name:f.name,blob:blob,preview:URL.createObjectURL(blob),size:blob.size});
+          renderReportPhotoGrid();
+        },'image/jpeg',0.78);
       };
+      img.onerror=function(){toast('✗ '+f.name+' is not a valid image','bad');};
       img.src=e.target.result;
     };
     rd.readAsDataURL(f);
   });
   ev.target.value='';
 };
-function renderReportPhotoGrid(){
+async function renderReportPhotoGrid(){
   var g=document.getElementById('sr_photo_grid');if(!g)return;
-  g.innerHTML=window._reportPhotos.map(function(p,i){
-    var safe=safeImgSrc(p.data);
-    return safe?'<div class="photo-thumb"><img src="'+safe+'"><button class="del" type="button" onclick="removeReportPhoto('+i+')">✕</button></div>':'';
+  var items=window._reportPhotos||[];
+  if(!items.length){g.innerHTML='';return;}
+  g.innerHTML=items.map(function(p,i){
+    return '<div class="photo-thumb" data-i="'+i+'"><img alt="Photo '+(i+1)+'" src=""><button class="del" type="button" aria-label="Remove photo '+(i+1)+'" onclick="removeReportPhoto('+i+')">✕</button></div>';
   }).join('');
+  for(var i=0;i<items.length;i++){
+    var u=await reportPhotoUrl(items[i]);
+    var cell=g.querySelector('[data-i="'+i+'"]');
+    if(cell&&u){var img=cell.querySelector('img');if(img)img.src=u;}
+  }
 }
-window.removeReportPhoto=function(i){window._reportPhotos.splice(i,1);renderReportPhotoGrid();};
+window.removeReportPhoto=function(i){
+  var p=window._reportPhotos&&window._reportPhotos[i];
+  if(p&&p.blob&&p.preview){try{URL.revokeObjectURL(p.preview);}catch(e){}}
+  window._reportPhotos.splice(i,1);renderReportPhotoGrid();
+};
 window.saveSiteReport=async function(){
   var btn=document.getElementById('srSaveBtn');if(btn&&btn.disabled)return;
+  var errEl=document.getElementById('sr_err');
   var d={report_date:document.getElementById('sr_date').value,title:document.getElementById('sr_title').value.trim(),weather:document.getElementById('sr_weather').value,temperature:Number(document.getElementById('sr_temp').value)||null,workforce_count:Number(document.getElementById('sr_wf').value)||0,activities:document.getElementById('sr_act').value.trim()||null,issues:document.getElementById('sr_iss').value.trim()||null,safety_notes:document.getElementById('sr_safety').value.trim()||null};
-  if(!d.report_date||!d.title){document.getElementById('sr_err').textContent='Date and title required';return;}
+  if(!d.report_date||!d.title){if(errEl)errEl.textContent='Date and title required';return;}
+  var reportId=window._editingReportId||genUUID();
   if(btn)btn.disabled=true;
-  try{await insertRow('site_reports',{project_id:state.currentProjectId,report_date:d.report_date,title:d.title,weather:d.weather,temperature:d.temperature,workforce_count:d.workforce_count,activities:d.activities,issues:d.issues,safety_notes:d.safety_notes,photos:window._reportPhotos.slice(),created_by:userProfile.name});await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('savedOk'),'ok');}catch(e){if(btn)btn.disabled=false;document.getElementById('sr_err').textContent='✗ '+e.message;}
+  try{
+    var photos=await uploadReportPhotos(reportId,errEl);
+    if(photos===null){if(btn)btn.disabled=false;return;}
+    await insertRow('site_reports',Object.assign({id:reportId},d,{project_id:state.currentProjectId,photos:photos,created_by:userProfile.name}));
+    await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('savedOk'),'ok');
+  }catch(e){if(btn)btn.disabled=false;if(errEl)errEl.textContent='✗ '+((e&&e.message)||e);}
 };
 window.viewSiteReport=function(id){
   var r=state.siteReports.find(function(x){return x.id===id;});if(!r)return;
@@ -2560,22 +2665,21 @@ window.viewSiteReport=function(id){
   function block(l,v){return v?'<div style="margin-top:12px"><div style="font-size:10.5px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:4px">'+l+'</div><div style="font-size:12.5px;white-space:pre-wrap">'+esc(v)+'</div></div>':'';}
   openModal('📸 '+esc(r.title||''),
     '<div class="mutc mono" style="font-size:11px;margin-bottom:8px">'+fmtDate(r.report_date)+' · '+esc(r.weather||'')+' · '+esc(r.workforce_count||0)+' workers</div>'+block('Activities',r.activities)+block('Issues',r.issues)+block('Safety',r.safety_notes)+
-    (photos.length?'<div style="margin-top:14px"><div style="font-size:10.5px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:6px">Photos ('+photos.length+')</div><div class="photo-grid">'+photos.map(function(p,idx){
-      var safe=safeImgSrc(p.data);
-      return safe?'<div class="photo-thumb" onclick="previewReportPhoto('+idx+')"><img src="'+safe+'"></div>':'';
-    }).join('')+'</div></div>':''),
+    (photos.length?'<div style="margin-top:14px"><div style="font-size:10.5px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:6px">Photos ('+photos.length+')</div><div class="photo-grid" id="srViewPhotoGrid"></div></div>':''),
     '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>',{wide:true});
 };
-window.previewReportPhoto=function(idx){
+window.previewReportPhoto=async function(idx){
   var p=window._viewingPhotos&&window._viewingPhotos[idx];if(!p)return;
-  var safe=safeImgSrc(p.data);if(!safe)return;
-  openModal('📷 '+esc(p.name||'Photo'),'<div style="text-align:center"><img src="'+safe+'" style="max-width:100%;max-height:72vh;border-radius:8px"></div>','<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>',{wide:true});
+  var url=await reportPhotoUrl(p);
+  if(!url)return toast('Photo is unavailable (storage policy or missing file)','bad');
+  openModal('📷 '+esc(p.name||'Photo'),'<div style="text-align:center"><img alt="Photo" src="'+esc(url)+'" style="max-width:100%;max-height:72vh;border-radius:8px"></div>','<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>',{wide:true});
 };
 window.editSiteReport=function(id){
   var r=state.siteReports.find(function(x){return x.id===id;});if(!r)return;
   var photos=parsePhotos(r);
   if(!Array.isArray(photos))photos=[];
-  window._reportPhotos=photos.slice();
+  window._editingReportId=id;
+  window._reportPhotos=photos.map(function(p){return {name:p.name,path:p.path,data:p.data,size:p.size,preview:''};});
   openModal('📸 '+t('edit'),
     '<div class="fgrid"><div class="field"><label>'+t('date')+'</label><input id="sr_date" type="date" value="'+esc(r.report_date||'')+'"></div><div class="field"><label>Weather</label><select id="sr_weather">'+['Sunny','Cloudy','Rainy','Windy','Hot','Hazy'].map(function(w){return '<option '+(r.weather===w?'selected':'')+'>'+w+'</option>';}).join('')+'</select></div><div class="field full"><label>Title</label><input id="sr_title" value="'+esc(r.title||'')+'"></div><div class="field"><label>Workers</label><input id="sr_wf" type="number" min="0" value="'+esc(r.workforce_count||0)+'"></div><div class="field"><label>Temp (°C)</label><input id="sr_temp" type="number" min="0" value="'+esc(r.temperature||30)+'"></div><div class="field full"><label>Activities</label><textarea id="sr_act" rows="3">'+esc(r.activities||'')+'</textarea></div><div class="field full"><label>Issues</label><textarea id="sr_iss" rows="2">'+esc(r.issues||'')+'</textarea></div><div class="field full"><label>Safety</label><textarea id="sr_safety" rows="2">'+esc(r.safety_notes||'')+'</textarea></div></div>'+
     '<div style="margin-top:14px"><div class="dropzone" onclick="document.getElementById(\'sr_photos\').click()"><input type="file" id="sr_photos" accept="image/*" multiple style="display:none" onchange="handleReportPhotos(event)"><div style="font-size:24px">📷</div><div style="font-size:12px">Add photos</div></div><div class="photo-grid" id="sr_photo_grid"></div></div>'+
@@ -2585,12 +2689,26 @@ window.editSiteReport=function(id){
 };
 window.saveEditSiteReport=async function(id){
   var btn=document.getElementById('srEditSaveBtn');if(btn&&btn.disabled)return;
-  var d={report_date:document.getElementById('sr_date').value,title:document.getElementById('sr_title').value.trim(),weather:document.getElementById('sr_weather').value,temperature:Number(document.getElementById('sr_temp').value)||null,workforce_count:Number(document.getElementById('sr_wf').value)||0,activities:document.getElementById('sr_act').value.trim()||null,issues:document.getElementById('sr_iss').value.trim()||null,safety_notes:document.getElementById('sr_safety').value.trim()||null,photos:window._reportPhotos.slice()};
-  if(!d.report_date||!d.title){document.getElementById('sr_err').textContent='Required';return;}
+  var errEl=document.getElementById('sr_err');
+  var d={report_date:document.getElementById('sr_date').value,title:document.getElementById('sr_title').value.trim(),weather:document.getElementById('sr_weather').value,temperature:Number(document.getElementById('sr_temp').value)||null,workforce_count:Number(document.getElementById('sr_wf').value)||0,activities:document.getElementById('sr_act').value.trim()||null,issues:document.getElementById('sr_iss').value.trim()||null,safety_notes:document.getElementById('sr_safety').value.trim()||null};
+  if(!d.report_date||!d.title){if(errEl)errEl.textContent='Required';return;}
   if(btn)btn.disabled=true;
-  try{await updateRow('site_reports',id,d);await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('updatedOk'),'ok');}catch(e){if(btn)btn.disabled=false;document.getElementById('sr_err').textContent='✗ '+e.message;}
+  try{
+    var photos=await uploadReportPhotos(id,errEl);
+    if(photos===null){if(btn)btn.disabled=false;return;}
+    await updateRow('site_reports',id,Object.assign({},d,{photos:photos}));
+    await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('updatedOk'),'ok');
+  }catch(e){if(btn)btn.disabled=false;if(errEl)errEl.textContent='✗ '+((e&&e.message)||e);}
 };
-window.deleteSiteReport=function(id){if(!confirm('Delete?'))return;deleteRow('site_reports',id).then(async function(){await reloadProjectTable('site_reports','report_date',false);render();toast(t('deletedOk'),'ok');}).catch(function(e){toast(e.message,'bad');});};
+window.deleteSiteReport=function(id){
+  if(!confirm('Delete this report and its photos?'))return;
+  var rec=state.siteReports.find(function(x){return x.id===id;});
+  var paths=parsePhotos(rec).map(function(p){return p&&p.path;}).filter(Boolean);
+  deleteRow('site_reports',id).then(async function(){
+    if(paths.length){try{await supabase.storage.from('siteforge-files').remove(paths);}catch(e){}}
+    await reloadProjectTable('site_reports','report_date',false);render();toast(t('deletedOk'),'ok');
+  }).catch(function(e){toast(e.message,'bad');});
+};
 
 function renderReports(el){
   var p=state.currentProject;var c=state.company||{};
@@ -2884,20 +3002,33 @@ async function refreshApprovalTables(items){
   var names=Object.keys(tables).filter(function(n){return n!=='company_expenses';});
   for(var i=0;i<names.length;i++){if(state.currentProjectId)await reloadProjectTable(names[i],null,true);}
 }
+/* Decide a pending row atomically: the status predicate prevents double-approval when a
+   second manager (or a stale tab) acts on the same item. Unknown columns added by
+   migrations that have not been run yet are dropped with a warning, as elsewhere. */
+async function updatePendingStatus(table,id,payload){
+  var p=Object.assign({},payload);
+  for(var attempt=0;attempt<10;attempt++){
+    var q=supabase.from(table).update(p).eq('id',id).eq('status','pending').select('id');
+    var r=await q;
+    if(!r.error){
+      if(!r.data||!r.data.length)throw new Error('Already decided by someone else — refresh to see the current status.');
+      return true;
+    }
+    var miss=unknownColumnOf(r.error);
+    if(miss&&Object.prototype.hasOwnProperty.call(p,miss.column)){delete p[miss.column];noteDroppedColumn(table,miss.column);continue;}
+    throw r.error;
+  }
+  throw new Error('Approval update failed on "'+table+'": too many unknown columns.');
+}
 async function writeApproval(it,status,reason){
   var updates={status:status};
-  if(it.table==='timesheets'&&status==='approved')updates.approved_by=userProfile.name;
-  if(status==='rejected')updates.rejection_reason=reason;
-  try{await updateRow(it.table,it.id,updates);}
-  catch(e){
-    var msg=String(e&&e.message||e);
-    if(status==='rejected'&&/rejection_reason/i.test(msg)){
-      await updateRow(it.table,it.id,{status:'rejected'});
-      await logTransaction('update',it.table,it.id,(it.label||'')+' rejected',null,null,{status:'rejected',rejection_reason:reason});
-      return;
-    }
-    throw e;
+  if(status==='approved'||status==='rejected'){
+    updates.approved_by=userProfile?userProfile.name:null;
+    updates.approved_at=new Date().toISOString();
   }
+  if(status==='rejected')updates.rejection_reason=reason||null;
+  await updatePendingStatus(it.table,it.id,updates);
+  await logTransaction('update',it.table,it.id,(it.label||'')+' '+status+(status==='rejected'&&reason?' ('+reason+')':''),null,null,{status:status,reason:reason||null});
 }
 async function runApprovalBatch(items,status,reason){
   if(window._batchBusy)return;
@@ -2909,8 +3040,9 @@ async function runApprovalBatch(items,status,reason){
   for(var i=0;i<items.length;i++){
     try{await writeApproval(items[i],status,reason);}catch(e){failed.push(approvalKey(items[i].table,items[i].id));}
   }
-  var exp=approvalExposure(items);
-  await logTransaction(status==='approved'?'approve':'reject','approvals',null,(status==='approved'?'Batch approve ':'Batch reject ')+items.length+' · '+money(exp.total),state.currentProjectId||null,null,{status:status,reason:reason||null,count:items.length,exposure:exp.total,categories:exp.by,failed:failed});
+  var okItems=items.filter(function(it){return failed.indexOf(approvalKey(it.table,it.id))<0;});
+  var exp=approvalExposure(okItems);
+  await logTransaction(status==='approved'?'approve':'reject','approvals',null,(status==='approved'?'Batch approve ':'Batch reject ')+okItems.length+(okItems.length!==items.length?' of '+items.length:'')+' · '+money(exp.total),state.currentProjectId||null,null,{status:status,reason:reason||null,count:okItems.length,failed:failed,exposure:exp.total,categories:exp.by});
   await refreshApprovalTables(items);
   items.forEach(function(it){if(failed.indexOf(approvalKey(it.table,it.id))<0)delete window._appSel[approvalKey(it.table,it.id)];});
   closeModal();
@@ -3267,5 +3399,33 @@ if(/[?&]selftest=1/.test(location.search)){
     getBoqActualsMap:typeof getBoqActualsMap==='function'?getBoqActualsMap:null
   };
 }
+/* ============================================================================
+   Module bridge — scripts/modules/*.js register extra views here instead of
+   editing this file. Contract: docs/modules/CONTRACT.md
+   ============================================================================ */
+var SFviews={};
+window.SFviews=SFviews;
+window.SF={
+  helpers:{esc:esc,t:t,money:money,money0:money0,num:num,numOr:numOr,fmtDate:fmtDate,fmtTime:fmtTime,today:today,toLocalDate:toLocalDate,daysUntil:daysUntil,safeImgSrc:safeImgSrc,parsePhotos:parsePhotos,genUUID:genUUID},
+  db:{select:fetchAllRows,selectStrict:fetchRowsStrict,insert:insertRow,update:updateRow,remove:deleteRow,log:logTransaction,client:function(){return supabase;},isReady:function(){return !!supabase;},upsert:async function(table,rows,onConflict){var q=supabase.from(table).upsert(rows,onConflict?{onConflict:onConflict}:undefined);var r=await q;return {data:(r&&r.data)||null,error:(r&&r.error)||null};}},
+  ui:{toast:toast,openModal:openModal,closeModal:function(){window.closeModal();},openFormModal:openFormModal,render:render,canManage:isManagerRole,hasView:hasView,goView:function(v){window.goView(v);}},
+  data:{state:state},
+  registerView:function(def){
+    if(!def||!def.id)throw new Error('SF.registerView: {id} required');
+    if(typeof def.render!=='function')throw new Error('SF.registerView: render(el) required');
+    SFviews[def.id]=def;
+  },
+  navItems:function(section){
+    return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
+  },
+  hasViewDefined:function(id){return !!SFviews[id];}
+};
+Object.defineProperty(window.SF,'user',{get:function(){return userProfile;}});
+Object.defineProperty(window.SF,'company',{get:function(){return state.company;}});
+Object.defineProperty(window.SF,'currentProject',{get:function(){return state.currentProject;}});
+Object.defineProperty(window.SF,'currentProjectId',{get:function(){return state.currentProjectId;}});
+Object.defineProperty(window.SF,'parties',{get:function(){return state.parties||[];}});
+Object.defineProperty(window.SF,'language',{get:function(){return appSettings.language;}});
+
 console.log('[SiteForge v28] ready');
 })();
