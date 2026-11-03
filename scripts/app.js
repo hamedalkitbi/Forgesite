@@ -55,6 +55,9 @@ function getPendingCount(){
   if(state.expenses) c += state.expenses.filter(function(e){return (e.status||'approved')==='pending';}).length;
   if(state.materials) c += state.materials.filter(function(m){return (m.status||'approved')==='pending';}).length;
   if(state.changeOrders) c += state.changeOrders.filter(function(co){return co.status==='pending';}).length;
+  (window.SF&&SF.approvalsSources||[]).forEach(function(fn){
+    try{var extra=fn();if(Array.isArray(extra))c+=extra.length;}catch(e){}
+  });
   return c;
 }
 
@@ -1626,7 +1629,7 @@ function renderMaterials(el){
   el.innerHTML='<h2 class="vt">▦ '+t('materials')+'</h2><div class="vsub">'+state.materials.length+(unlinked.length?' · <span class="warnc">'+unlinked.length+' not linked to BOQ</span>':'')+(canEdit?'<span class="spacer"></span><button class="btn" onclick="newMaterial()">'+t('newItem')+'</button>':'')+'</div><div class="card"><div style="overflow-x:auto"><table><thead><tr><th>PO</th><th>'+t('supplier')+'</th><th>'+t('description')+'</th><th>BOQ Link</th><th class="tright">'+t('qty')+'</th><th class="tright">Cost</th><th>Stage</th><th></th></tr></thead><tbody>'+(state.materials.length?state.materials.map(function(m){
     var boqItem=boqMap[m.boq_item_id];
     var boqLabel=boqItem?esc((boqItem.code||'')+' '+boqItem.desc.slice(0,24)):'<span class="warnc" style="font-size:10.5px">⚠ Unlinked</span>';
-    return '<tr><td class="mono" style="color:var(--accent)">'+esc(m.po)+((m.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(m.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+'</td><td>'+esc(m.supplier)+'</td><td>'+esc(m.desc)+'</td><td style="font-size:11px">'+boqLabel+'</td><td class="tright">'+m.qty+' '+esc(m.unit||'')+'</td><td class="tright mono">'+money(m.unitCost)+'</td><td><span class="tag info">'+esc(m.stage)+'</span></td><td class="tright" style="white-space:nowrap">'+(isManagerRole()&&(m.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'materials\',\''+esc(m.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'materials\',\''+esc(m.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editMaterial(\''+esc(m.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteMaterial(\''+esc(m.id)+'\')">✕</button>':'')+'</td></tr>';
+    return '<tr><td class="mono" style="color:var(--accent)">'+esc(m.po)+((m.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(m.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+(m.approvedBy?'<div class="mutc" style="font-size:10px">'+esc(m.approvedBy)+'</div>':'')+'</td><td>'+esc(m.supplier)+'</td><td>'+esc(m.desc)+'</td><td style="font-size:11px">'+boqLabel+'</td><td class="tright">'+m.qty+' '+esc(m.unit||'')+'</td><td class="tright mono">'+money(m.unitCost)+'</td><td><span class="tag info">'+esc(m.stage)+'</span></td><td class="tright" style="white-space:nowrap">'+(isManagerRole()&&(m.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'materials\',\''+esc(m.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'materials\',\''+esc(m.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editMaterial(\''+esc(m.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteMaterial(\''+esc(m.id)+'\')">✕</button>':'')+'</td></tr>';
   }).join(''):'<tr><td colspan="8" class="empty"><div class="big">▦</div>'+t('noData')+'</td></tr>')+'</tbody></table></div></div>';
 }
 window.newMaterial=function(){
@@ -2868,6 +2871,9 @@ function collectPendingItems(filter){
   if(all||filter==='ts') (state.timesheets||[]).forEach(function(x){if(x.status==='pending')items.push({type:'Labor',cat:'Labor',id:x.id,table:'timesheets',label:(x.name||'')+' · '+(x.date||''),amount:Number(x.cost)||0,project:state.currentProject?state.currentProject.code:'—',submitter:x.name||'—'});});
   if(all||filter==='exp') (state.expenses||[]).forEach(function(e){if((e.status||'approved')==='pending')items.push({type:'Expense',cat:'Expenses',id:e.id,table:'company_expenses',label:e.description||e.category||'Expense',amount:Number(e.amount)||0,project:'Company',submitter:e.created_by||'—'});});
   if(all||filter==='mat') (state.materials||[]).forEach(function(m){if((m.status||'approved')==='pending')items.push({type:'PO',cat:'POs',id:m.id,table:'materials',label:(m.po||'')+' · '+(m.desc||'').slice(0,40),amount:(Number(m.qty)||0)*(Number(m.unitCost)||0),project:state.currentProject?state.currentProject.code:'—',submitter:m.supplier||'—'});});
+  (window.SF&&SF.approvalsSources||[]).forEach(function(fn){
+    try{var extra=fn();if(Array.isArray(extra))items=items.concat(extra);}catch(e){console.warn('[SiteForge] approvals source failed',e);}
+  });
   if(all||filter==='co') (state.changeOrders||[]).forEach(function(co){if(co.status==='pending')items.push({type:'CO',cat:'Change Orders',id:co.id,table:'change_orders',label:(co.coNumber||'')+' · '+(co.desc||'').slice(0,40),amount:Number(co.amount)||0,project:state.currentProject?state.currentProject.code:'—',submitter:'Field'});});
   return items;
 }
@@ -3005,10 +3011,11 @@ async function refreshApprovalTables(items){
 /* Decide a pending row atomically: the status predicate prevents double-approval when a
    second manager (or a stale tab) acts on the same item. Unknown columns added by
    migrations that have not been run yet are dropped with a warning, as elsewhere. */
-async function updatePendingStatus(table,id,payload){
+async function updatePendingStatus(table,id,payload,expectedStatus){
+  var expected=expectedStatus||'pending';
   var p=Object.assign({},payload);
   for(var attempt=0;attempt<10;attempt++){
-    var q=supabase.from(table).update(p).eq('id',id).eq('status','pending').select('id');
+    var q=supabase.from(table).update(p).eq('id',id).eq('status',expected).select('id');
     var r=await q;
     if(!r.error){
       if(!r.data||!r.data.length)throw new Error('Already decided by someone else — refresh to see the current status.');
@@ -3027,7 +3034,7 @@ async function writeApproval(it,status,reason){
     updates.approved_at=new Date().toISOString();
   }
   if(status==='rejected')updates.rejection_reason=reason||null;
-  await updatePendingStatus(it.table,it.id,updates);
+  await updatePendingStatus(it.table,it.id,updates,it.pendingStatus||'pending');
   await logTransaction('update',it.table,it.id,(it.label||'')+' '+status+(status==='rejected'&&reason?' ('+reason+')':''),null,null,{status:status,reason:reason||null});
 }
 async function runApprovalBatch(items,status,reason){
@@ -3044,6 +3051,7 @@ async function runApprovalBatch(items,status,reason){
   var exp=approvalExposure(okItems);
   await logTransaction(status==='approved'?'approve':'reject','approvals',null,(status==='approved'?'Batch approve ':'Batch reject ')+okItems.length+(okItems.length!==items.length?' of '+items.length:'')+' · '+money(exp.total),state.currentProjectId||null,null,{status:status,reason:reason||null,count:okItems.length,failed:failed,exposure:exp.total,categories:exp.by});
   await refreshApprovalTables(items);
+  if(window.SF&&SF.approvalsRefresh)SF.approvalsRefresh.forEach(function(fn){try{fn();}catch(e){}});
   items.forEach(function(it){if(failed.indexOf(approvalKey(it.table,it.id))<0)delete window._appSel[approvalKey(it.table,it.id)];});
   closeModal();
   render();
@@ -3396,7 +3404,10 @@ if(/[?&]selftest=1/.test(location.search)){
     workerTakeHome:typeof workerTakeHome==='function'?workerTakeHome:null,
     parseWorkerPay:typeof parseWorkerPay==='function'?parseWorkerPay:null,
     computeIpcPreview:typeof computeIpcPreview==='function'?computeIpcPreview:null,
-    getBoqActualsMap:typeof getBoqActualsMap==='function'?getBoqActualsMap:null
+    getBoqActualsMap:typeof getBoqActualsMap==='function'?getBoqActualsMap:null,
+    collectPendingItems:typeof collectPendingItems==='function'?collectPendingItems:null,
+    getPendingCount:typeof getPendingCount==='function'?getPendingCount:null,
+    approvalExposure:typeof approvalExposure==='function'?approvalExposure:null
   };
 }
 /* ============================================================================
@@ -3418,7 +3429,12 @@ window.SF={
   navItems:function(section){
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
-  hasViewDefined:function(id){return !!SFviews[id];}
+  hasViewDefined:function(id){return !!SFviews[id];},
+  /* Modules can feed their pending items into the single Executive Approvals Queue. */
+  approvalsSources:[],
+  approvalsRefresh:[],
+  registerApprovalsSource:function(fn){if(typeof fn==='function')SF.approvalsSources.push(fn);},
+  registerApprovalsRefresh:function(fn){if(typeof fn==='function')SF.approvalsRefresh.push(fn);}
 };
 Object.defineProperty(window.SF,'user',{get:function(){return userProfile;}});
 Object.defineProperty(window.SF,'company',{get:function(){return state.company;}});

@@ -114,6 +114,35 @@ async function main() {
     assert(htmlSource.includes('id="loginError" class="login-error" role="alert"'), 'login error live region missing');
     assert(appSource.includes("host.setAttribute('role','status')"), 'toast live region missing');
   });
+  await test('module bridge is present and modules are loaded', () => {
+    assert(appSource.includes('window.SF={'), 'window.SF bridge missing');
+    assert(appSource.includes('SF.registerView'), 'module registration missing');
+    for (const mod of ['payment-requests', 'finance-statements', 'payslips']) {
+      assert(htmlSource.includes(`scripts/modules/${mod}.js`), `${mod}.js not loaded by index.html`);
+    }
+  });
+  await test('site-report photos go through storage, not inline row base64', () => {
+    assert(appSource.includes('async function uploadReportPhotos('), 'uploadReportPhotos missing');
+    assert(appSource.includes("storage.from('siteforge-files').upload("), 'storage upload missing');
+    assert(appSource.includes('createSignedUrl(p.path'), 'signed URL resolution missing');
+  });
+  await test('approvals are decided with a pending-status precondition', () => {
+    assert(appSource.includes("eq('status','pending')"), 'status CAS predicate missing');
+    assert(appSource.includes('approved_at=new Date().toISOString()') || appSource.includes('updates.approved_at'), 'approver timestamp missing');
+  });
+  await test('migrations for approvals/photos and feature modules exist', async () => {
+    const files = [
+      '202611031004_po_approvals_and_site_photos.sql',
+      '202611031001_payment_requests.sql',
+      '202611031002_finance_statements.sql',
+      '202611031003_payslips.sql'
+    ];
+    for (const file of files) {
+      const body = await readFile(join(ROOT, 'supabase', 'migrations', file), 'utf8').catch(() => null);
+      assert(body, `missing migration: ${file}`);
+      assert(/create table if not exists/i.test(body) || /alter table .*add column if not exists/i.test(body), `${file} is not idempotent`);
+    }
+  });
 
   console.log('\nRuntime');
   try {
@@ -155,6 +184,28 @@ async function main() {
       assert(dom.xlsxLoaded, 'window.XLSX missing');
     });
     await test('self-test hook is exposed', () => eq(dom.hook, 'object', 'typeof window.__sf'));
+    await test('module approvals feed the single Executive Approvals Queue', async () => {
+      const queue = await client.evaluate(`(() => {
+        window.__sfQueueTest = [{ type: 'PR', cat: 'Payment Requests', id: 'pr-1', table: 'payment_requests', label: 'PR-001', amount: 250, project: 'P1', pendingStatus: 'submitted' }];
+        window.SF.registerApprovalsSource(function () { return window.__sfQueueTest; });
+        const items = window.__sf.collectPendingItems('all');
+        const exposure = window.__sf.approvalExposure(items);
+        const count = window.__sf.getPendingCount();
+        window.SF.approvalsSources.pop();
+        window.__sfQueueTest = [];
+        return { items: items.length, total: exposure.total, count: count };
+      })()`);
+      eq(queue.items, 1, 'payment request should appear in the queue');
+      eq(queue.total, 250, 'queue exposure should include its amount');
+      eq(queue.count, 1, 'pending badge should include it');
+    });
+    await test('feature modules register their views', async () => {
+      const views = await client.evaluate(`(() => ({ ids: Object.keys(window.SFviews || {}), allRender: Object.keys(window.SFviews || {}).every((k) => typeof window.SFviews[k].render === 'function') }))()`);
+      for (const id of ['payment-requests', 'finance', 'payslips']) {
+        assert(views.ids.includes(id), `module view not registered: ${id}`);
+      }
+      assert(views.allRender, 'a registered module view has no render()');
+    });
 
     const units = await client.evaluate(`(() => {
       const s = window.__sf;
@@ -181,7 +232,14 @@ async function main() {
         imgData: s.safeImgSrc('data:image/png;base64,AAAA'),
         cellFormula: s.safeSpreadsheetCell('=1+1'),
         cellNumber: s.safeSpreadsheetCell(5),
-        uuid: s.genUUID()
+        uuid: s.genUUID(),
+        takeHomeCap: s.workerTakeHome({ salary: 1000, loan: 5000, deduct: 5000 }),
+        takeHomeLoan: s.workerTakeHome({ salary: 1000, loan: 100, deduct: 250 }),
+        takeHomeRound: s.workerTakeHome({ salary: 1000.005, loan: 2000, deduct: 100 }),
+        ipcBase: s.computeIpcPreview(1000, 10, 0, 0),
+        ipcPartial: s.computeIpcPreview(1000, 10, 0, 500),
+        ipcRounding: s.computeIpcPreview(1234.57, 7.5, 0, 0),
+        ipcNegative: s.computeIpcPreview(-50, 10, 0, 0)
       };
     })()`);
 
@@ -219,6 +277,32 @@ async function main() {
     });
     await test('genUUID() returns a v4 UUID', () => {
       assert(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(units.uuid), `bad uuid: ${units.uuid}`);
+    });
+    await test('IPC valuation math: retention, previous certification, VAT', () => {
+      eq(units.ipcBase.retention, 100, 'retention 10% of 1000');
+      eq(units.ipcBase.cumNetEarned, 900, 'cumulative net earned');
+      eq(units.ipcBase.currentNetExclVat, 900, 'current net excl VAT');
+      eq(units.ipcBase.vat, 45, '5% VAT');
+      eq(units.ipcBase.totalIncVat, 945, 'total incl VAT');
+      eq(units.ipcPartial.currentNetExclVat, 400, 'deducting 500 previously certified');
+      eq(units.ipcPartial.vat, 20, 'VAT on the delta only');
+      eq(units.ipcRounding.retention, 92.59, 'retention rounding to 2dp');
+      eq(units.ipcRounding.currentNetExclVat, 1141.98, 'net rounding to 2dp');
+      eq(units.ipcRounding.vat, 57.1, 'VAT rounding to 2dp');
+      eq(units.ipcRounding.totalIncVat, 1199.08, 'total rounding to 2dp');
+      eq(units.ipcNegative.gross, 0, 'negative claim clamped to zero');
+      eq(units.ipcNegative.totalIncVat, 0, 'zero total for negative claim');
+    });
+    await test('workerTakeHome caps loan deduction at salary and loan', () => {
+      eq(units.takeHomeCap.deduct, 1000, 'deduction capped at salary');
+      eq(units.takeHomeCap.salaryNet, 0, 'net after full deduction');
+      eq(units.takeHomeCap.remaining, 4000, 'loan remaining');
+      eq(units.takeHomeCap.shortfall, 4000, 'unrecovered shortfall carried');
+      eq(units.takeHomeLoan.deduct, 100, 'deduction capped at loan');
+      eq(units.takeHomeLoan.salaryNet, 900, 'net after loan');
+      eq(units.takeHomeLoan.remaining, 0, 'loan cleared');
+      eq(units.takeHomeRound.deduct, 100, 'rounded deduction');
+      eq(units.takeHomeRound.salaryNet, 900.01, 'rounded net');
     });
 
     console.log('\nAccessibility basics');

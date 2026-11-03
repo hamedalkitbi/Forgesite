@@ -47,10 +47,43 @@ there is no local/demo mode.
 | `sw.js` | Service worker: offline app shell + CDN caching |
 | `site.webmanifest` | PWA manifest (installable, standalone display) |
 | `icons/` | App icons — `icon.svg` is the source; PNGs are generated |
+| `scripts/modules/` | Optional feature modules (payment requests, financial accounts, payslips) registered through the `window.SF` bridge |
+| `supabase/migrations/` | Idempotent SQL to run in the Supabase SQL editor (features degrade gracefully until applied) |
+| `docs/modules/` | Module contract (`CONTRACT.md`) and per-feature notes |
 | `tools/` | Zero-dependency dev tooling: tests, smoke test, icon renderer, screenshots, CDP lib |
 | `docs/` | `ENHANCEMENTS.md` (shipped + backlog), `audits/` (data, UX/a11y, architecture), `screenshots/` |
 | `.github/workflows/` | `ci.yml` (lint + headless tests), `pages.yml` (GitHub Pages deploy) |
 | `apply_all.py`, `fix_anchors.py` | **Historical** patch scripts — see below |
+
+## Feature modules
+
+New features are **not** written inside `scripts/app.js`. Each one is a plain script in
+`scripts/modules/` that registers a view through the `window.SF` bridge (see
+[`docs/modules/CONTRACT.md`](docs/modules/CONTRACT.md)):
+
+| Module | View | What it does |
+|---|---|---|
+| `payment-requests.js` | Payment Requests (project) | Subcontractor/supplier payment requests: retention + advance recovery, submit → approve/reject → pay, ageing, printable request |
+| `finance-statements.js` | Financial Accounts (company) | Receivables, payables, ageing, derived balance sheet (always balanced) and P&L across all projects |
+| `payslips.js` | Payslips (project) | Batch payslip generation from approved timesheets, per-worker print/PDF, loan deductions with carry-forward |
+
+Modules register nav entries, respect role permissions (`roles: [...]`), and show a migration
+hint instead of an empty screen when their table does not exist yet.
+
+## Database migrations
+
+Run the SQL files in `supabase/migrations/` **in filename order** in the Supabase SQL editor
+(Dashboard → SQL → New query). Every file is idempotent, so re-running is safe.
+
+| Migration | Adds |
+|---|---|
+| `202611031001_payment_requests.sql` | `payment_requests` table + RLS |
+| `202611031002_finance_statements.sql` | `finance_settings` table + RLS |
+| `202611031003_payslips.sql` | `payslips` table + RLS |
+| `202611031004_po_approvals_and_site_photos.sql` | approver columns for BOQ/POs/change orders/expenses/timesheets, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
+
+Until a migration is applied, its module shows a "needs a database update" card naming the file
+— nothing else in the app breaks.
 
 ## Accessibility
 
@@ -96,7 +129,7 @@ The suite is dependency-free (Node ≥ 20 + a local Chrome/Chromium); it starts 
 own static server and a headless browser over the DevTools Protocol, then cleans up.
 
 ```bash
-npm test               # 43 checks: assets, PWA, runtime, helpers, a11y, Arabic RTL, offline
+npm test               # 49 checks: assets, PWA, runtime, helpers, a11y, Arabic RTL, offline, modules
 npm run smoke          # load the app once and fail on any console error / 4xx
 npm run icons          # re-render icons/*.png from icons/icon.svg
 ```
