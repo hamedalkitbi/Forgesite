@@ -2,7 +2,7 @@
   "name": "SiteForge ERP",
   "short_name": "SiteForge",
   "description": "Field-to-office construction cost certification: BOQ, progress billing, payroll, approvals and site reports.",
-  "id": "/forgesite/",
+  "id": "./",
   "start_url": "./index.html?source=pwa",
   "scope": "./",
   "display": "standalone",

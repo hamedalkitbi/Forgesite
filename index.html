@@ -20,21 +20,22 @@
 </head>
 <body>
 
+<a class="skip-link" href="#main">Skip to content</a>
 <div id="globalError"></div>
 <div id="version">v28</div>
 
 <div id="loginScreen">
   <div class="login-stage">
     <aside class="login-aside">
-      <div class="login-kicker">CONSTRUCTION ERP</div>
-      <h2>Sign the work before it hits the books.</h2>
-      <p>Field teams log labor, materials, and variations. Directors and controllers certify what becomes real cost.</p>
-      <div class="login-pills"><span>BOQ</span><span>Timesheets</span><span>Purchase orders</span><span>Change orders</span></div>
+      <div class="login-kicker" id="loginKicker">CONSTRUCTION ERP</div>
+      <h2 id="loginHeadline">Sign the work before it hits the books.</h2>
+      <p id="loginSub">Field teams log labor, materials, and variations. Directors and controllers certify what becomes real cost.</p>
+      <div class="login-pills"><span id="pillBoq">BOQ</span><span id="pillTimesheets">Timesheets</span><span id="pillPos">Purchase orders</span><span id="pillCos">Change orders</span></div>
     </aside>
     <div class="login-card">
       <div class="login-brand">
         <div class="login-mark" id="loginMark">⛏</div>
-        <div><h1 id="loginName">SiteForge ERP</h1><p>Multi-Project Construction Management</p></div>
+        <div><h1 id="loginName">SiteForge ERP</h1><p id="loginTagline">Multi-Project Construction Management</p></div>
       </div>
       <form id="loginForm" onsubmit="event.preventDefault();if(window.doLogin)window.doLogin();return false;" autocomplete="on">
         <div class="lf">
@@ -49,8 +50,8 @@
           <label class="chk" for="rememberMe"><input type="checkbox" id="rememberMe"> <span id="lblRemember">Remember me</span></label>
           <button type="button" class="linkbtn" id="lblForgot" onclick="openForgotPassword()">Forgot password?</button>
         </div>
-        <div id="loginStatus"></div>
-        <div id="loginError" class="login-error"></div>
+        <div id="loginStatus" aria-live="polite"></div>
+        <div id="loginError" class="login-error" role="alert" aria-live="assertive"></div>
         <button type="submit" class="login-btn" id="loginBtn" onclick="event.preventDefault();if(window.doLogin){window.doLogin();}else{document.getElementById('loginError').textContent='❌ App script not initialized.';}return false;">Sign In →</button>
       </form>
     </div>
@@ -59,25 +60,25 @@
 
 <div id="appShell">
   <header class="topbar">
-    <button class="menu-toggle" onclick="toggleMobileMenu()">☰</button>
+    <button class="menu-toggle" type="button" aria-label="Menu" aria-controls="sidebar" aria-expanded="false" onclick="toggleMobileMenu()">☰</button>
     <div class="brand"><div class="mark" id="brandMark">⛏</div><div id="companyBrand">SiteForge<small>ERP · CONSTRUCTION</small></div></div>
     <select class="proj-selector" id="projSelector" onchange="switchProject(this.value)"></select>
     <div class="spacer"></div>
     <span class="pill aed">AED</span>
-    <button class="tbtn" id="approvalsBtn" onclick="goView('approvals')" style="display:none">🛡️<span class="notif-badge" id="approvalsBadge" style="display:none">0</span></button>
-    <button class="tbtn" id="notifBtn" onclick="toggleNotifPanel(event)">🔔<span class="notif-badge" id="notifBadge" style="display:none">0</span></button>
+    <button class="tbtn" id="approvalsBtn" aria-label="Approvals" onclick="goView('approvals')" style="display:none">🛡️<span class="notif-badge" id="approvalsBadge" style="display:none">0</span></button>
+    <button class="tbtn" id="notifBtn" aria-label="Notifications" aria-controls="notifPanel" aria-expanded="false" onclick="toggleNotifPanel(event)">🔔<span class="notif-badge" id="notifBadge" style="display:none">0</span></button>
     <button class="tbtn ai" id="scanBtn" onclick="openScanner()" style="display:none">📷 Scan</button>
     <span id="userChip"></span>
     <button class="tbtn" id="btnSignOut" onclick="doLogout()">🚪 Sign Out</button>
   </header>
-  <div class="notif-panel" id="notifPanel">
+  <div class="notif-panel" id="notifPanel" aria-label="Alerts">
     <div class="notif-head">🔔 Alerts <span style="flex:1"></span><button class="btn ghost sm" onclick="markAllNotifsRead()">Mark all read</button></div>
     <div class="notif-list" id="notifList"><div class="notif-empty">Loading…</div></div>
   </div>
   <div class="shell">
     <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleMobileMenu()"></div>
-    <nav class="sidebar" id="sidebar"></nav>
-    <main id="main"></main>
+    <nav class="sidebar" id="sidebar" aria-label="Views"></nav>
+    <main id="main" tabindex="-1"></main>
   </div>
 </div>
 

@@ -11,7 +11,7 @@
  */
 'use strict';
 
-var VERSION = 'v29.0.0-1';
+var VERSION = 'v29.1.0-1';
 var CACHE = 'forgesite-' + VERSION;
 
 var CORE = [
@@ -38,8 +38,15 @@ self.addEventListener('install', function (event) {
     await Promise.allSettled(CORE.map(function (url) {
       return cache.add(new Request(url, { cache: 'reload' }));
     }));
-    await Promise.allSettled(CDN_ASSETS.map(function (url) {
-      return cache.add(new Request(url, { mode: 'no-cors' }));
+    // CDN libraries: fetch with CORS (both hosts send ACAO:*) so Cache.add's
+    // 2xx-only requirement is met. An opaque/non-CORS response cannot use add().
+    await Promise.allSettled(CDN_ASSETS.map(async function (url) {
+      try {
+        var response = await fetch(new Request(url, { mode: 'cors', credentials: 'omit' }));
+        if (response && (response.ok || response.type === 'opaque')) await cache.put(url, response);
+      } catch (err) {
+        /* Offline or blocked at install time: cacheFirst() will populate it on first use. */
+      }
     }));
     await self.skipWaiting();
   })());

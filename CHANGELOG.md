@@ -12,22 +12,45 @@ All notable changes are documented here. Format follows
   (192/512/maskable/apple-touch) rendered from `icons/icon.svg`
 - Meta: description, `theme-color`, `color-scheme`, `viewport-fit=cover`,
   preconnect/dns-prefetch hints, `<noscript>` fallback
-- Zero-dependency test tooling: `tools/run-tests.mjs` (30 checks: static assets,
-  PWA manifest, headless runtime smoke, pure-helper unit tests, accessibility
-  basics, offline shell), `tools/smoke.mjs`, `tools/make-icons.mjs`,
+- Zero-dependency test tooling: `tools/run-tests.mjs` (43 checks: static assets,
+  PWA manifest, headless runtime smoke, pure-helper unit tests, accessibility,
+  Arabic RTL, source invariants, SW CDN precache, offline shell),
+  `tools/smoke.mjs`, `tools/make-icons.mjs`, `tools/screenshots.mjs`,
   `tools/lib/cdp.mjs` DevTools-Protocol driver
 - `package.json` scripts (`serve`, `test`, `smoke`, `icons`)
 - CI workflow (HTMLHint + JS syntax + headless test suite) and a GitHub Pages
   deploy workflow
+- Audit reports and backlog: `docs/audits/` (data, UX/a11y, architecture),
+  `docs/ENHANCEMENTS.md`, `docs/screenshots/`
 
 ### Changed
 - `index.html` references the manifest/icons and registers the service worker on
   https/localhost (`?nosw=1` opt-out)
-- README rewritten: layout, offline behavior, testing, deployment and
-  backend/RLS notes
+- Accessibility: sidebar navigation is `<button>` + `aria-current`; modals move
+  focus in, trap Tab and restore it; form fields get `label[for]`,
+  `aria-required`, `aria-invalid` and focus the first invalid field; login/form
+  errors are `role="alert"`; toasts use a persistent `role="status"` live region;
+  icon-only buttons get accessible names; skip link to `#main`; global
+  `:focus-visible` rings; `prefers-reduced-motion` support
+- Contrast: light theme `--muted` darkened to AA, new `--accent-ink` token for
+  text/icons (fills keep the accent), `AED` pill and white-on-red fixed
+- RTL: removed two double-flips (sidebar, modal footer), switched to logical
+  properties (`border-inline-end`, `inset-inline-*`, `margin-inline-start`)
+- Login shell is fully bilingual: aside copy, tagline, placeholders, `<title>`
+  and the mirrored CTA arrow follow the language setting
+- README rewritten: layout, offline behavior, accessibility, testing,
+  deployment and backend/RLS notes
 
 ### Fixed
 - Removed the `favicon.ico` 404 (SVG app icon now served from `icons/icon.svg`)
+- Data integrity: project-switch race (generation guard + rollback + cleared
+  project caches) no longer leaves new project ids beside old rows; `deleteRow`
+  verifies a row was actually removed; OCR bill commit writes an explicit
+  `status`; audit-write failures are surfaced; `daysUntil` handles ISO timestamps
+  (no more "in null d" alerts); next IPC number parses the trailing sequence;
+  unhandled promise rejections reach the error banner (now dismissible)
+- PWA: CDN libraries are precached with CORS + `cache.put` (opaque responses made
+  `cache.add` reject); manifest `id` is relative so installs survive a host/path change
 
 ## [29.0.0] - 2026-11-03
 

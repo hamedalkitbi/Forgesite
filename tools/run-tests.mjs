@@ -4,24 +4,12 @@
 // Usage: node tools/run-tests.mjs   (or: npm test)
 // Starts its own static server and headless Chrome, then cleans both up.
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, dirname } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkJsSyntax, collectDiagnostics, connect, launchChrome, sleep } from './lib/cdp.mjs';
+import { startServer } from './lib/server.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon'
-};
 
 const results = [];
 function record(name, ok, detail = '') {
@@ -39,33 +27,6 @@ async function test(name, fn) {
 function assert(condition, message) { if (!condition) throw new Error(message || 'assertion failed'); }
 function eq(actual, expected, label) {
   if (actual !== expected) throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-}
-
-function startServer(root) {
-  const server = createServer(async (req, res) => {
-    try {
-      const url = new URL(req.url, 'http://localhost');
-      let pathname = decodeURIComponent(url.pathname);
-      if (pathname.endsWith('/')) pathname += 'index.html';
-      const filePath = normalize(join(root, pathname));
-      if (!filePath.startsWith(normalize(root))) { res.writeHead(403); res.end('forbidden'); return; }
-      const body = await readFile(filePath);
-      res.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream', 'cache-control': 'no-store' });
-      res.end(body);
-    } catch {
-      res.writeHead(404, { 'content-type': 'text/plain' });
-      res.end('not found');
-    }
-  });
-  return new Promise((resolvePromise, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      resolvePromise({
-        url: `http://127.0.0.1:${server.address().port}`,
-        close: () => new Promise((done) => server.close(done))
-      });
-    });
-  });
 }
 
 async function waitFor(predicate, { timeout = 20000, interval = 200, label = 'condition' } = {}) {
@@ -119,6 +80,39 @@ async function main() {
     assert(sizes.includes('192x192') && sizes.includes('512x512'), 'icons 192x192 + 512x512 required');
     assert(manifest.icons.some((icon) => icon.purpose === 'maskable'), 'maskable icon required');
     assert(manifest.start_url && manifest.scope, 'start_url/scope required');
+  });
+  await test('manifest id is relative (portable across hosts)', async () => {
+    const manifest = JSON.parse(await readFile(join(ROOT, 'site.webmanifest'), 'utf8'));
+    assert(manifest.id === './', `id should be "./", got ${JSON.stringify(manifest.id)}`);
+  });
+
+  console.log('\nSource invariants (regression guards)');
+  const appSource = await readFile(join(ROOT, 'scripts/app.js'), 'utf8');
+  const cssSource = await readFile(join(ROOT, 'styles/main.css'), 'utf8');
+  const htmlSource = await readFile(join(ROOT, 'index.html'), 'utf8');
+
+  await test('sidebar navigation is built from button elements', () => {
+    assert(appSource.includes('<button type="button" class="navitem'), 'renderSidebar must emit real buttons');
+    assert(!appSource.includes('<div class="navitem'), 'no non-focusable div nav items');
+    assert(appSource.includes('aria-current="page"'), 'active nav item must expose aria-current');
+  });
+  await test('visible focus styles exist', () => {
+    assert(/:focus-visible\{outline:2px solid/.test(cssSource), ':focus-visible outline rule missing');
+  });
+  await test('modals manage focus', () => {
+    assert(appSource.includes('Focus trap inside the open dialog'), 'modal focus trap missing');
+    assert(appSource.includes("setAttribute('aria-labelledby','modalTitle')"), 'dialog accessible name missing');
+  });
+  await test('project switch is guarded against stale loads', () => {
+    assert(appSource.includes('state._loadGen'), 'load generation guard missing');
+    assert(appSource.includes('if(gen!==state._loadGen)return false;'), 'stale-load abort missing');
+  });
+  await test('deletes verify a row was actually removed', () => {
+    assert(appSource.includes(".delete().eq('id',id).select('id')"), 'deleteRow must verify affected rows');
+  });
+  await test('live regions exist for feedback', () => {
+    assert(htmlSource.includes('id="loginError" class="login-error" role="alert"'), 'login error live region missing');
+    assert(appSource.includes("host.setAttribute('role','status')"), 'toast live region missing');
   });
 
   console.log('\nRuntime');
@@ -235,27 +229,80 @@ async function main() {
         if (el.closest('label')) return false;
         return !(el.id && document.querySelector('label[for="' + el.id + '"]'));
       }).map((el) => el.id || el.name || el.type);
-      const unlabeledButtons = [...document.querySelectorAll('button')].filter((b) => !(b.textContent || '').trim() && !b.getAttribute('aria-label') && !b.getAttribute('title')).length;
+      const unlabeledButtons = [...document.querySelectorAll('button')].filter((b) => {
+        const visible = b.offsetParent !== null;
+        if (!visible) return false;
+        return !(b.textContent || '').trim() && !b.getAttribute('aria-label') && !b.getAttribute('title');
+      }).length;
+      const loginError = document.getElementById('loginError');
+      const main = document.getElementById('main');
       return {
         lang: document.documentElement.lang,
         unlabeledInputs: unlabeled,
         unlabeledButtons,
-        hasRoleDialog: !!document.querySelector('#modalRoot[role="dialog"]')
+        hasRoleDialog: !!document.querySelector('#modalRoot[role="dialog"]'),
+        skipLink: !!document.querySelector('a.skip-link[href="#main"]'),
+        mainFocusable: !!main && main.tabIndex === -1,
+        loginErrorRole: loginError ? loginError.getAttribute('role') : null,
+        ariaAttrCount: document.querySelectorAll('[aria-label],[aria-live],[aria-current],[aria-expanded],[aria-controls],[aria-required],[aria-invalid],[aria-labelledby]').length
       };
     })()`);
     await test('document declares a language', () => assert(a11y.lang, 'html[lang] missing'));
     await test('login inputs all have labels', () => assert(a11y.unlabeledInputs.length === 0, 'unlabeled: ' + a11y.unlabeledInputs.join(', ')));
     await test('modal root exposes dialog role', () => assert(a11y.hasRoleDialog, 'role=dialog missing'));
+    await test('skip link targets the main region', () => {
+      assert(a11y.skipLink, 'skip link missing');
+      assert(a11y.mainFocusable, '#main needs tabindex="-1"');
+    });
+    await test('login errors are announced', () => eq(a11y.loginErrorRole, 'alert', 'loginError role'));
+    await test('no unlabeled visible buttons', () => eq(a11y.unlabeledButtons, 0, 'icon-only buttons without accessible name'));
+    await test('ARIA attributes are present', () => assert(a11y.ariaAttrCount >= 5, `only ${a11y.ariaAttrCount} ARIA attributes found`));
+    await test('login shell localizes to Arabic and switches to RTL', async () => {
+      const { result } = await client.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `try { localStorage.setItem('siteforge_settings_v1', JSON.stringify({ language: 'ar', theme: 'dark' })); } catch (e) {}`
+      });
+      try {
+        await client.send('Page.navigate', { url: `${server.url}/index.html?selftest=1&nosw=1` });
+        await waitFor(async () => await client.evaluate('document.readyState === "complete" && typeof window.doLogin === "function"'), { label: 'arabic bootstrap' });
+        await sleep(400);
+        const ar = await client.evaluate(`(() => ({
+          dir: document.documentElement.dir,
+          lang: document.documentElement.lang,
+          headline: (document.getElementById('loginHeadline') || {}).textContent || '',
+          placeholder: (document.getElementById('loginUser') || {}).placeholder || ''
+        }))()`);
+        eq(ar.dir, 'rtl', 'html[dir] must be rtl');
+        eq(ar.lang, 'ar', 'html[lang]');
+        assert(/[\u0600-\u06FF]/.test(ar.headline), 'headline is not Arabic: ' + ar.headline);
+        assert(ar.placeholder === 'اسم المستخدم', 'username placeholder not translated: ' + ar.placeholder);
+      } finally {
+        await client.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: result.identifier });
+        await client.evaluate(`localStorage.removeItem('siteforge_settings_v1')`);
+      }
+    });
 
     console.log('\nOffline (service worker)');
     await client.send('Page.navigate', { url: `${server.url}/index.html` });
     await waitFor(async () => await client.evaluate('document.readyState === "complete" && typeof window.doLogin === "function"'), { label: 'sw page bootstrap' });
     await test('service worker registers and caches the shell', async () => {
       await waitFor(async () => await client.evaluate('navigator.serviceWorker.getRegistrations().then((r) => r.length > 0)'), { timeout: 20000, label: 'service worker registration' });
-      await waitFor(async () => await client.evaluate(`caches.keys().then((keys) => keys.some((k) => k.indexOf('forgesite-') === 0))`), { timeout: 20000, label: 'shell cache' });
-      // Second load must be controlled by the worker before the offline check is meaningful.
-      await client.send('Page.reload');
+      // Wait for activation (not just registration): reloading mid-install can abort it.
+      await waitFor(async () => await client.evaluate('navigator.serviceWorker.getRegistrations().then((r) => r.some((x) => !!x.active))'), { timeout: 20000, label: 'service worker activation' });
       await waitFor(async () => await client.evaluate('!!navigator.serviceWorker.controller'), { timeout: 20000, label: 'sw controller' });
+      await waitFor(async () => await client.evaluate(`caches.keys().then((keys) => keys.some((k) => k.indexOf('forgesite-') === 0))`), { timeout: 20000, label: 'shell cache' });
+    });
+    await test('service worker precaches the CDN libraries', async () => {
+      const cachedUrls = await client.evaluate(`(async () => {
+        const keys = await caches.keys();
+        const urls = [];
+        for (const key of keys) {
+          const cache = await caches.open(key);
+          for (const request of await cache.keys()) urls.push(request.url);
+        }
+        return urls;
+      })()`);
+      assert(cachedUrls.some((u) => u.includes('xlsx.full.min.js')), `SheetJS missing from cache (${cachedUrls.length} entries)`);
+      assert(cachedUrls.some((u) => u.includes('supabase.min.js')), `supabase-js missing from cache (${cachedUrls.length} entries)`);
     });
     await test('app shell loads while offline', async () => {
       await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });

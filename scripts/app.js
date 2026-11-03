@@ -1,4 +1,27 @@
-window.__errQ=[];window.onerror=function(m,u,l){var b=document.getElementById('globalError');if(b){b.style.display='block';b.textContent='❌ '+m+' (line '+l+')';}else{window.__errQ.push('❌ '+m+' (line '+l+')');}return false;};(function(){function f(){var b=document.getElementById('globalError');if(b&&window.__errQ.length){b.style.display='block';b.textContent=window.__errQ.join('\n');}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',f);}else{f();}})();
+window.__errQ=[];
+window.__errTimer=null;
+/* One dismissible, auto-hiding error banner for sync errors AND unhandled promise rejections. */
+function __sfFlushErrors(){
+  var b=document.getElementById('globalError');if(!b)return;
+  if(!window.__errQ.length){b.style.display='none';return;}
+  b.textContent='';
+  var span=document.createElement('span');span.textContent=window.__errQ.join(' · ');b.appendChild(span);
+  var x=document.createElement('button');x.type='button';x.className='x';x.setAttribute('aria-label','Dismiss error');x.textContent='✕';
+  x.onclick=function(){b.style.display='none';window.__errQ=[];};
+  b.appendChild(x);
+  b.setAttribute('role','alert');
+  b.style.display='block';
+  clearTimeout(window.__errTimer);
+  window.__errTimer=setTimeout(function(){b.style.display='none';},15000);
+}
+window.onerror=function(m,u,l){window.__errQ.push('❌ '+m+(l?' (line '+l+')':''));__sfFlushErrors();return false;};
+window.addEventListener('unhandledrejection',function(e){
+  var r=e.reason;
+  var msg=(r&&(r.message||r.error_description))||String(r||'Unhandled promise rejection');
+  window.__errQ.push('❌ '+msg);
+  __sfFlushErrors();
+});
+(function(){function f(){__sfFlushErrors();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',f);}else{f();}})();
 
 (function(){
 'use strict';
@@ -71,9 +94,20 @@ function toLocalDate(v){
 function fmtDate(ts){var d=toLocalDate(ts);if(!d)return '—';return d.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'2-digit'});}
 function fmtTime(ts){var d=toLocalDate(ts);if(!d)return '—';return d.toLocaleString('en-US',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function today(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-function daysUntil(d){if(!d)return null;var t2=new Date(d+'T00:00:00').getTime();var n=new Date(today()+'T00:00:00').getTime();if(isNaN(t2))return null;return Math.round((t2-n)/86400000);}
+function daysUntil(d){var dt=toLocalDate(d);if(!dt)return null;var t2=dt.getTime();var n=new Date(today()+'T00:00:00').getTime();return Math.round((t2-n)/86400000);}
 var toastTimer=null;
-function toast(msg,cls){var t2=document.querySelector('.toast');if(t2)t2.remove();t2=document.createElement('div');t2.className='toast '+(cls||'');t2.textContent=msg;document.body.appendChild(t2);clearTimeout(toastTimer);toastTimer=setTimeout(function(){t2.remove();},2600);}
+function toast(msg,cls){
+  var host=document.getElementById('toastHost');
+  if(!host){
+    host=document.createElement('div');host.id='toastHost';host.className='toast-host';
+    host.setAttribute('role','status');host.setAttribute('aria-live','polite');
+    document.body.appendChild(host);
+  }
+  while(host.children.length>2)host.removeChild(host.firstChild);
+  var el=document.createElement('div');el.className='toast '+(cls||'');el.textContent=msg;host.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){el.remove();},cls==='bad'?6500:3500);
+}
 
 function initSupabase(){
   try{
@@ -207,8 +241,25 @@ function applyI18nStatic(){
   var p=document.getElementById('lblPassword');if(p)p.textContent=t('password');
   var r=document.getElementById('lblRemember');if(r)r.textContent=t('rememberMe');
   var f=document.getElementById('lblForgot');if(f)f.textContent=t('forgotPassword');
-  var b=document.getElementById('loginBtn');if(b&&!b.disabled)b.textContent=t('signInToContinue');
   var so=document.getElementById('btnSignOut');if(so)so.textContent='🚪 '+t('signOut');
+  // Login aside/tagline/placeholders are not in LANG; translate them here so the shell
+  // is fully bilingual before sign-in (Arabic otherwise showed English marketing copy).
+  var ar=appSettings.language==='ar';
+  var setTxt=function(id,en,arTxt){var el=document.getElementById(id);if(el)el.textContent=ar?arTxt:en;};
+  setTxt('loginKicker','CONSTRUCTION ERP','تخطيط موارد الإنشاء');
+  setTxt('loginHeadline','Sign the work before it hits the books.','وقّع العمل قبل أن يُقيَّد في الدفاتر.');
+  setTxt('loginSub','Field teams log labor, materials, and variations. Directors and controllers certify what becomes real cost.','تسجّل فرق الموقع العمالة والمواد وأوامر التغيير، ويعتمد المدير والمراقب المالي ما يصبح تكلفة فعلية.');
+  setTxt('pillBoq','BOQ','جدول الكميات');
+  setTxt('pillTimesheets','Timesheets','كشوف الوقت');
+  setTxt('pillPos','Purchase orders','أوامر الشراء');
+  setTxt('pillCos','Change orders','أوامر التغيير');
+  setTxt('loginTagline','Multi-Project Construction Management','إدارة إنشاءات متعددة المشاريع');
+  // Mirror the CTA arrow for RTL reading direction.
+  var lb=document.getElementById('loginBtn');
+  if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
+  var userEl=document.getElementById('loginUser');
+  if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v28';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -276,9 +327,12 @@ async function reloadProjectTable(table,orderCol,asc){
 }
 
 async function loadProjectData(pid){
+  if(!supabase)return false;
+  // Generation guard: a newer switchProject() invalidates this load; stale results are dropped
+  // instead of being mapped over state alongside the new project's id (wrong-project writes).
+  var gen=(state._loadGen=(state._loadGen||0)+1);
   var proj=state.projects.find(function(p){return p.id===pid;});
-  if(!proj){var chk=await supabase.from('projects').select('*').eq('id',pid).single();if(chk.error||!chk.data)return false;proj=chk.data;state.projects.push(proj);}
-  state.currentProjectId=pid;state.currentProject=proj;
+  if(!proj){var chk=await supabase.from('projects').select('*').eq('id',pid).single();if(gen!==state._loadGen)return false;if(chk.error||!chk.data)return false;proj=chk.data;state.projects.push(proj);}
   var f={project_id:pid};
   var r=await Promise.all([
     fetchAllRows('budget_lines',f,'code',true),
@@ -296,6 +350,8 @@ async function loadProjectData(pid){
     fetchAllRows('drawings',f,'created_at',false),
     fetchAllRows('site_reports',f,'report_date',false)
   ]);
+  if(gen!==state._loadGen)return false;
+  state.currentProjectId=pid;state.currentProject=proj;
   mapProjectTable('budget_lines',r[0]);
   mapProjectTable('timesheets',r[1]);
   mapProjectTable('materials',r[2]);
@@ -324,16 +380,31 @@ function refreshProjSelector(){
   state.projects.forEach(function(p){h+='<option value="'+esc(p.id)+'" '+(state.currentProjectId===p.id?'selected':'')+'>'+esc(p.code)+' · '+esc(p.name)+'</option>';});
   sel.innerHTML=h;
 }
+function clearProjectState(){
+  ['budget','timesheets','materials','payroll','audit','boq','schedule','payments','parties','changeOrders','billings','attachments','drawings','siteReports'].forEach(function(k){
+    if(Array.isArray(state[k]))state[k]=[];
+  });
+}
 window.switchProject=async function(pid){
-  if(!pid){state.currentProjectId=null;state.currentProject=null;currentView='company-dash';await loadCompanyData();refreshProjSelector();render();return;}
-  var ok=await loadProjectData(pid);
-  if(!ok||!state.currentProject){toast('Could not load project','bad');return;}
-  currentView='project-dash';refreshProjSelector();render();
-  var ovr=collectBudgetAlerts().filter(function(a){return a.severity==='overrun';});
-  if(ovr.length){
-    toast('Opened: '+state.currentProject.name+' — ⚠ '+ovr.length+' budget overrun'+(ovr.length>1?'s':''),'bad');
-  }else{
-    toast('Opened: '+state.currentProject.name,'ok');
+  try{
+    if(!pid){
+      state.currentProjectId=null;state.currentProject=null;currentView='company-dash';
+      await loadCompanyData();clearProjectState();refreshProjSelector();render();return;
+    }
+    var ok=await loadProjectData(pid);
+    if(!ok)return; // superseded by a newer switch, or the load failed and rolled back
+    if(!state.currentProject){toast('Could not load project','bad');return;}
+    currentView='project-dash';refreshProjSelector();render();
+    var ovr=collectBudgetAlerts().filter(function(a){return a.severity==='overrun';});
+    if(ovr.length){
+      toast('Opened: '+state.currentProject.name+' — ⚠ '+ovr.length+' budget overrun'+(ovr.length>1?'s':''),'bad');
+    }else{
+      toast('Opened: '+state.currentProject.name,'ok');
+    }
+  }catch(e){
+    // Never leave the UI pointing at a half-loaded project.
+    toast('Could not load project: '+((e&&e.message)||'network error'),'bad');
+    if(state.currentProject){refreshProjSelector();render();}
   }
 };
 function hasView(v){return userProfile&&(PERMS[userProfile.role]||[]).indexOf(v)>=0;}
@@ -360,16 +431,16 @@ function collectAlerts(){
   (state.workers||[]).forEach(function(w){
     if(w.status==='inactive')return;
     [{label:'Work Permit',date:w.work_permit_expiry},{label:'Passport',date:w.passport_expiry},{label:'Emirates ID',date:w.emirates_id_expiry},{label:'Visa',date:w.visa_expiry}].forEach(function(c){
-      if(!c.date)return;var d=daysUntil(c.date);
+      if(!c.date)return;var d=daysUntil(c.date);if(d===null)return;
       if(d<0)out.push({severity:'expired',title:w.name+' — '+c.label+' expired',detail:'Staff '+(w.staff_no||'')+' · '+fmtDate(c.date),days:d});
       else if(d<=30)out.push({severity:'soon',title:w.name+' — '+c.label+' in '+d+'d',detail:'Staff '+(w.staff_no||'')+' · '+fmtDate(c.date),days:d});
     });
-    if(w.work_permit_renewal_due){var rd=daysUntil(w.work_permit_renewal_due);if(rd<0)out.push({severity:'expired',title:w.name+' — Permit renewal overdue',detail:'Staff '+(w.staff_no||'')+' · '+fmtDate(w.work_permit_renewal_due),days:rd});else if(rd<=30)out.push({severity:'soon',title:w.name+' — Permit renewal in '+rd+'d',detail:fmtDate(w.work_permit_renewal_due),days:rd});}
+    if(w.work_permit_renewal_due){var rd=daysUntil(w.work_permit_renewal_due);if(rd!==null){if(rd<0)out.push({severity:'expired',title:w.name+' — Permit renewal overdue',detail:'Staff '+(w.staff_no||'')+' · '+fmtDate(w.work_permit_renewal_due),days:rd});else if(rd<=30)out.push({severity:'soon',title:w.name+' — Permit renewal in '+rd+'d',detail:fmtDate(w.work_permit_renewal_due),days:rd});}}
   });
   (state.complianceDocs||[]).forEach(function(c){
-    if(c.expiry_date){var d=daysUntil(c.expiry_date);if(d<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' expired',detail:(c.doc_number||'')+' · '+fmtDate(c.expiry_date),days:d});else if(d<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' in '+d+'d',detail:fmtDate(c.expiry_date),days:d});}
-    if(c.renewal_due_date){var rd=daysUntil(c.renewal_due_date);if(rd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' renewal overdue',detail:fmtDate(c.renewal_due_date),days:rd});else if(rd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' renewal in '+rd+'d',detail:fmtDate(c.renewal_due_date),days:rd});}
-    if(c.payment_due_date){var pd=daysUntil(c.payment_due_date);if(pd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' payment overdue',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});else if(pd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' payment in '+pd+'d',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});}
+    if(c.expiry_date){var d=daysUntil(c.expiry_date);if(d!==null){if(d<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' expired',detail:(c.doc_number||'')+' · '+fmtDate(c.expiry_date),days:d});else if(d<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' in '+d+'d',detail:fmtDate(c.expiry_date),days:d});}}
+    if(c.renewal_due_date){var rd=daysUntil(c.renewal_due_date);if(rd!==null){if(rd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' renewal overdue',detail:fmtDate(c.renewal_due_date),days:rd});else if(rd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' renewal in '+rd+'d',detail:fmtDate(c.renewal_due_date),days:rd});}}
+    if(c.payment_due_date){var pd=daysUntil(c.payment_due_date);if(pd!==null){if(pd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' payment overdue',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});else if(pd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' payment in '+pd+'d',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});}}
   });
   out.sort(function(a,b){return a.days-b.days;});
   return out;
@@ -434,6 +505,16 @@ function render(){
     case 'approvals':renderApprovals(m);break;
     default:renderCompanyDash(m);
   }
+  nameIconButtons(document.body);
+}
+/* Give icon-only buttons an accessible name (screen readers otherwise announce "✎"). */
+function nameIconButtons(root){
+  if(!root||!root.querySelectorAll)return;
+  var map={'✕':'Close','✎':'Edit','✓':'Approve','✗':'Reject','🖨':'Print','⬇':'Download','👁':'View','📎':'Attach','🔑':'Reset password','📷':'Scan bill','🗑':'Delete','☰':'Menu','🔔':'Notifications','🛡️':'Approvals','⚙':'Settings'};
+  Array.prototype.forEach.call(root.querySelectorAll('button:not([aria-label])'),function(b){
+    var t=(b.textContent||'').replace(/\s+/g,' ').trim();
+    if(t&&Object.prototype.hasOwnProperty.call(map,t))b.setAttribute('aria-label',map[t]);
+  });
 }
 function renderTop(){
   if(userProfile){
@@ -502,7 +583,7 @@ function renderSidebar(){
   if(hasView('users'))h+=nb('users','👥',t('userMgmt'));
   if(hasView('history'))h+=nb('history','📜',t('history'));
   sb.innerHTML=h;
-  function nb(id,ic,l,bd){return '<div class="navitem '+(currentView===id?'on':'')+'" onclick="goView(\''+id+'\')"><span class="ic">'+ic+'</span>'+l+(bd||'')+'</div>';}
+  function nb(id,ic,l,bd){return '<button type="button" class="navitem'+(currentView===id?' on':'')+'"'+(currentView===id?' aria-current="page"':'')+' onclick="goView(\''+id+'\')"><span class="ic" aria-hidden="true">'+ic+'</span>'+l+(bd||'')+'</button>';}
 }
 window.goView=function(v){
   var sb=document.getElementById('sidebar');
@@ -536,7 +617,14 @@ function humanLabel(table,row){
 }
 async function logTransaction(action,table,recordId,recordLabel,projectId,before,after){
   if(!supabase||!userProfile)return;
-  try{await supabase.from('transaction_history').insert({user_id:currentUser?currentUser.id:null,user_name:userProfile.name,user_role:userProfile.role,action:action,table_name:table,record_id:recordId?String(recordId):null,record_label:recordLabel||null,project_id:projectId||state.currentProjectId||null,before_data:before||null,after_data:after||null});}catch(e){}
+  try{
+    var r=await supabase.from('transaction_history').insert({user_id:currentUser?currentUser.id:null,user_name:userProfile.name,user_role:userProfile.role,action:action,table_name:table,record_id:recordId?String(recordId):null,record_label:recordLabel||null,project_id:projectId||state.currentProjectId||null,before_data:before||null,after_data:after||null});
+    if(r&&r.error)throw new Error(r.error.message);
+  }catch(e){
+    // PostgREST returns errors instead of throwing; make an incomplete audit trail visible.
+    console.warn('[SiteForge] audit write failed:',(e&&e.message)||e);
+    toast('Saved, but the audit-trail entry failed — check transaction_history permissions','bad');
+  }
 }
 function genUUID(){
   if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();
@@ -596,33 +684,50 @@ async function updateRow(table,id,data,expectedUpdatedAt){
 async function deleteRow(table,id){
   var before=null;
   try{var b=await supabase.from(table).select('*').eq('id',id).single();before=b.data;}catch(e){}
-  var r=await supabase.from(table).delete().eq('id',id);
+  var r=await supabase.from(table).delete().eq('id',id).select('id');
   if(r.error)throw r.error;
+  if(!r.data||!r.data.length)throw new Error('Delete affected 0 rows on "'+table+'" — the record may be protected by row-level security.');
   logTransaction('delete',table,id,humanLabel(table,before||{}),before?before.project_id:null,before,null);
   return true;
 }
 
+var _modalPrevFocus=null;
 function openModal(title,body,foot,opts){
   opts=opts||{};
-  var r=document.getElementById('modalRoot');r.style.display='block';
-  r.innerHTML='<div class="mbackdrop" onclick="if(event.target===this)closeModal()"><div class="mbox '+(opts.wide?'wide':'')+'"><div class="mhead"><h3>'+title+'</h3><button class="x" aria-label="Close" onclick="closeModal()">✕</button></div><div class="mbody">'+body+'</div><div class="mfoot">'+(foot||'<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>')+'</div></div></div>';
+  var r=document.getElementById('modalRoot');
+  _modalPrevFocus=document.activeElement;
+  r.style.display='block';
+  r.setAttribute('aria-labelledby','modalTitle');
+  r.innerHTML='<div class="mbackdrop" onclick="if(event.target===this)closeModal()"><div class="mbox '+(opts.wide?'wide':'')+'"><div class="mhead"><h3 id="modalTitle" tabindex="-1">'+title+'</h3><button class="x" aria-label="Close" onclick="closeModal()">✕</button></div><div class="mbody">'+body+'</div><div class="mfoot">'+(foot||'<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>')+'</div></div></div>';
+  // Move focus into the dialog so keyboard/SR users are not left behind the backdrop.
+  setTimeout(function(){
+    if(r.style.display!=='block')return;
+    var f=r.querySelector('.mbody input:not([type="hidden"]):not([disabled]),.mbody select,.mbody textarea,.mbody button')||r.querySelector('#modalTitle');
+    if(f&&f.focus){try{f.focus({preventScroll:true});}catch(e){f.focus();}}
+  },40);
 }
 window.openModal=openModal;
-window.closeModal=function(){var r=document.getElementById('modalRoot');r.innerHTML='';r.style.display='none';};
+window.closeModal=function(){
+  var r=document.getElementById('modalRoot');
+  r.innerHTML='';r.style.display='none';
+  var prev=_modalPrevFocus;_modalPrevFocus=null;
+  if(prev&&prev.focus){try{prev.focus({preventScroll:true});}catch(e){prev.focus();}}
+};
 
 function buildForm(fields,values){
   values=values||{};var h='<div class="fgrid">';
   fields.forEach(function(f){
     var v=values[f.key]!=null?values[f.key]:(f.default!=null?f.default:'');
-    h+='<div class="'+(f.full?'field full':'field')+'"><label>'+f.label+(f.required?'<span style="color:var(--bad)">*</span>':'')+'</label>';
+    var req=f.required?' aria-required="true"':'';
+    h+='<div class="'+(f.full?'field full':'field')+'"><label for="f_'+f.key+'">'+f.label+(f.required?'<span style="color:var(--bad)" aria-hidden="true">*</span>':'')+'</label>';
     if(f.type==='select'){
-      h+='<select id="f_'+f.key+'">';
+      h+='<select id="f_'+f.key+'"'+req+'>';
       (f.options||[]).forEach(function(o){var ov=typeof o==='object'?o.value:o,ol=typeof o==='object'?o.label:o;h+='<option value="'+esc(ov)+'" '+(String(v)===String(ov)?'selected':'')+'>'+esc(ol)+'</option>';});
       h+='</select>';
     }else if(f.type==='searchable_select'){
       var dispVal='';
       (f.options||[]).forEach(function(o){if(o.value&&String(o.value)===String(v))dispVal=o.label;});
-      h+='<input list="list_'+f.key+'" id="f_'+f.key+'" value="'+esc(dispVal)+'" placeholder="Type code or description to search..." autocomplete="off">';
+      h+='<input list="list_'+f.key+'" id="f_'+f.key+'"'+req+' value="'+esc(dispVal)+'" placeholder="Type code or description to search..." autocomplete="off">';
       h+='<datalist id="list_'+f.key+'">';
       (f.options||[]).forEach(function(o){
         if(!o.value)return;
@@ -630,17 +735,17 @@ function buildForm(fields,values){
       });
       h+='</datalist>';
     }else if(f.type==='textarea'){
-      h+='<textarea id="f_'+f.key+'" rows="'+(f.rows||3)+'">'+esc(v)+'</textarea>';
+      h+='<textarea id="f_'+f.key+'"'+req+' rows="'+(f.rows||3)+'">'+esc(v)+'</textarea>';
     }else{
-      h+='<input id="f_'+f.key+'" type="'+(f.type||'text')+'" value="'+esc(v)+'" '+(f.step?'step="'+f.step+'"':'')+' '+(f.min!=null?'min="'+f.min+'"':'')+'>';
+      h+='<input id="f_'+f.key+'" type="'+(f.type||'text')+'"'+req+' value="'+esc(v)+'" '+(f.step?'step="'+f.step+'"':'')+' '+(f.min!=null?'min="'+f.min+'"':'')+'>';
     }
     h+='</div>';
   });
-  return h+'</div><div class="ferror" id="formErr"></div>';
+  return h+'</div><div class="ferror" id="formErr" role="alert"></div>';
 }
 
 function readForm(fields){
-  var d={},err='';
+  var d={},err='',bad=[];
   fields.forEach(function(f){
     var el=document.getElementById('f_'+f.key);if(!el)return;
     var v=el.value;
@@ -652,15 +757,22 @@ function readForm(fields){
         for(var i=0;i<opts.length;i++){
           if(opts[i].value.trim()===v.trim()){matchedId=opts[i].getAttribute('data-id');break;}
         }
-        if(!matchedId)err+='• Select a valid item from the list for '+f.label+'\n';
+        if(!matchedId){err+='• Select a valid item from the list for '+f.label+'\n';bad.push(el);}
       }
       v=matchedId;
     }
-    if(f.required&&(v===null||v===''))err+='• '+f.label+' required\n';
+    if(f.required&&(v===null||v==='')){err+='• '+f.label+' required\n';if(bad.indexOf(el)<0)bad.push(el);}
     if(f.type==='number')v=v===''?0:Number(v);
     d[f.key]=v;
   });
-  if(err){document.getElementById('formErr').textContent=err;return null;}
+  if(err){
+    bad.forEach(function(el){el.setAttribute('aria-invalid','true');});
+    var fe=document.getElementById('formErr');
+    if(fe)fe.textContent=err;
+    var first=bad.filter(function(el){return el.offsetParent!==null;})[0]||bad[0];
+    if(first&&first.focus){try{first.focus({preventScroll:false});}catch(e){first.focus();}}
+    return null;
+  }
   return d;
 }
 
@@ -1312,7 +1424,9 @@ function computeIpcPreview(grossClaim,retPct,advPct,prevCertified){
 function getNextBillingNo(){
   var max=0;
   state.billings.forEach(function(b){
-    var m=String(b.billingNo||'').match(/(\d+)/);
+    var s=String(b.billingNo||'');
+    // Parse the trailing sequence ("PB-007" -> 7), not the first digit run ("INV-2026-001" -> 1).
+    var m=s.match(/^PB-(\d+)$/)||s.match(/(\d+)\s*$/);
     if(m){var n=parseInt(m[1],10);if(n>max)max=n;}
   });
   return 'PB-'+String(max+1).padStart(3,'0');
@@ -2890,8 +3004,9 @@ async function loadNotifications(){
 }
 window.closeNotifPanel=function(){var p=document.getElementById('notifPanel');if(p)p.classList.remove('on');};
 window.toggleNotifPanel=function(e){
-  e.stopPropagation();
+  if(e)e.stopPropagation();
   var p=document.getElementById('notifPanel');p.classList.toggle('on');
+  var tb=document.getElementById('notifBtn');if(tb)tb.setAttribute('aria-expanded',p.classList.contains('on')?'true':'false');
   if(p.classList.contains('on')){
     var list=document.getElementById('notifList');
     var alerts=collectAlerts();
@@ -3024,6 +3139,7 @@ window.commitScan=async function(){
       stage:'Inspected',
       invoice_date:d.invoiceDate||today(),
       terms:d.terms||null,
+      status:isManagerRole()?'approved':'pending',
       source:'OCR'
     });
     await reloadProjectTable('materials','created_at',false);closeModal();render();toast(t('savedOk')+' — remember to link to a BOQ item','ok');
@@ -3033,7 +3149,13 @@ window.commitScan=async function(){
 window.toggleMobileMenu=function(){
   var sb=document.getElementById('sidebar');
   var bd=document.getElementById('sidebarBackdrop');
-  if(sb&&bd){sb.classList.toggle('open');bd.classList.toggle('open');}
+  if(sb&&bd){
+    sb.classList.toggle('open');bd.classList.toggle('open');
+    var open=sb.classList.contains('open');
+    var mt=document.querySelector('.menu-toggle');
+    if(mt)mt.setAttribute('aria-expanded',open?'true':'false');
+    if(open){var first=sb.querySelector('.navitem');if(first&&first.focus)try{first.focus({preventScroll:true});}catch(e){first.focus();}}
+  }
 };
 
 async function restoreSession(){
@@ -3096,7 +3218,7 @@ prefillRemembered();
 
 document.addEventListener('click',function(e){
   var p=document.getElementById('notifPanel');
-  if(p&&p.classList.contains('on')&&!e.target.closest('#notifPanel')&&!e.target.closest('#notifBtn'))p.classList.remove('on');
+  if(p&&p.classList.contains('on')&&!e.target.closest('#notifPanel')&&!e.target.closest('#notifBtn')){p.classList.remove('on');var tb2=document.getElementById('notifBtn');if(tb2)tb2.setAttribute('aria-expanded','false');}
   var actBtn=e.target.closest('[data-action]');
   if(actBtn){
     var act=actBtn.getAttribute('data-action');
@@ -3107,9 +3229,23 @@ document.addEventListener('click',function(e){
 });
 
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape'&&document.getElementById('modalRoot').style.display==='block'){
-    window.closeModal();
+  if(e.key==='Escape'){
+    if(document.getElementById('modalRoot').style.display==='block'){window.closeModal();return;}
+    var np=document.getElementById('notifPanel');
+    if(np&&np.classList.contains('on')){np.classList.remove('on');var nb2=document.getElementById('notifBtn');if(nb2){nb2.setAttribute('aria-expanded','false');if(nb2.focus)nb2.focus();}return;}
+    var sb=document.getElementById('sidebar');
+    if(sb&&sb.classList.contains('open')){window.toggleMobileMenu();var mt=document.querySelector('.menu-toggle');if(mt&&mt.focus)mt.focus();return;}
+    return;
   }
+  if(e.key!=='Tab')return;
+  // Focus trap inside the open dialog.
+  var r=document.getElementById('modalRoot');if(r.style.display!=='block')return;
+  var box=r.querySelector('.mbox');if(!box)return;
+  var f=box.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
+  if(!f.length)return;
+  var first=f[0],last=f[f.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
 });
 
 initSupabase();

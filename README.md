@@ -47,9 +47,24 @@ there is no local/demo mode.
 | `sw.js` | Service worker: offline app shell + CDN caching |
 | `site.webmanifest` | PWA manifest (installable, standalone display) |
 | `icons/` | App icons — `icon.svg` is the source; PNGs are generated |
-| `tools/` | Zero-dependency dev tooling: tests, smoke test, icon renderer, CDP lib |
+| `tools/` | Zero-dependency dev tooling: tests, smoke test, icon renderer, screenshots, CDP lib |
+| `docs/` | `ENHANCEMENTS.md` (shipped + backlog), `audits/` (data, UX/a11y, architecture), `screenshots/` |
 | `.github/workflows/` | `ci.yml` (lint + headless tests), `pages.yml` (GitHub Pages deploy) |
 | `apply_all.py`, `fix_anchors.py` | **Historical** patch scripts — see below |
+
+## Accessibility
+
+The shell targets WCAG 2.2 AA for its own chrome:
+
+- sidebar navigation is real `<button>`s with `aria-current`; **modals** move focus in, trap Tab,
+  and restore focus on close; **Escape** closes the dialog, notifications and the mobile drawer
+- login/form errors use `role="alert"`, toasts use a persistent `role="status"` live region
+- generated form fields have `label[for]`, `aria-required`, and focus the first invalid field
+- skip link to `#main`, visible `:focus-visible` rings, icon-only buttons have accessible names
+- light-theme contrast tokens: `--muted` and `--accent-ink` are AA on their surfaces; fills stay orange
+- reduced-motion support; RTL uses logical properties (two double-flips removed)
+
+Screenshots: [`docs/screenshots/`](docs/screenshots/). Audit: [`docs/audits/ux-a11y.md`](docs/audits/ux-a11y.md).
 
 ## Offline & installable (PWA)
 
@@ -81,7 +96,7 @@ The suite is dependency-free (Node ≥ 20 + a local Chrome/Chromium); it starts 
 own static server and a headless browser over the DevTools Protocol, then cleans up.
 
 ```bash
-npm test               # 30 checks: assets, PWA manifest, runtime, helpers, a11y, offline
+npm test               # 43 checks: assets, PWA, runtime, helpers, a11y, Arabic RTL, offline
 npm run smoke          # load the app once and fail on any console error / 4xx
 npm run icons          # re-render icons/*.png from icons/icon.svg
 ```
@@ -92,8 +107,12 @@ npm run icons          # re-render icons/*.png from icons/icon.svg
 2. `scripts/app.js` and `sw.js` parse; manifest has the fields installability needs
 3. the app boots with **zero** JS exceptions, CDN globals present, login screen rendered
 4. pure helpers behave (`money`, `numOr`, `esc`, date handling, XSS sinks, `genUUID`)
-5. accessibility basics (document language, labelled login inputs, dialog role)
-6. the service worker registers, caches the shell and the app **renders while offline**
+5. accessibility basics: document language, labelled inputs, dialog role, skip link, ARIA
+   live regions, accessible names for icon-only buttons
+6. the login shell localizes to Arabic and switches to RTL
+7. the service worker registers, **precaches both CDN libraries**, and the app renders offline
+8. source invariants stay fixed (button-based nav, modal focus trap, load-generation guard,
+   verified deletes, live regions) — a regression here fails CI
 
 If Chrome is not in a standard location, set `CHROME_PATH=/path/to/chrome`.
 

@@ -1,0 +1,137 @@
+# Enhancement work — SiteForge ERP (`Forgesite`)
+
+> Baseline imported from `github.com/hamedalkitbi/Forgesite` @ `43be218` (v29.0.0 refactor).
+> This document records what was **shipped**, the **audit backlog** behind it, and the
+> recommended order for the next phases. Three read-only audits were run against the
+> baseline first; their full reports live in [`docs/audits/`](audits/).
+
+- Branch: `enhance/pwa-and-tests`
+- Audit findings: **30** data-layer, **29** UX/a11y, **24** architecture/security
+- Test suite: `node tools/run-tests.mjs` → **43/43 passing**, including the offline app shell
+- Screenshots: [`docs/screenshots/`](screenshots/) (dark, light, Arabic/RTL, mobile)
+
+---
+
+## 1. Shipped in this pass
+
+### 1.1 Installable, offline-capable shell (PWA)
+
+| Piece | Detail |
+|---|---|
+| `site.webmanifest` | standalone display, relative `id`/`start_url`/`scope` (portable across hosts), `any` + `maskable` icons |
+| `sw.js` | versioned caches (`v29.1.0-1`); navigation network-first with cached shell fallback; same-origin stale-while-revalidate; pinned CDN cache-first; **Supabase REST/auth/realtime never cached**; old caches pruned on activate |
+| Icons | `icons/icon.svg` source (pickaxe mark) → generated 192/512/maskable/apple-touch PNGs via `tools/make-icons.mjs` |
+| `index.html` | manifest/icon links, description, `theme-color`, `color-scheme`, preconnect/dns-prefetch, `viewport-fit=cover`, `<noscript>` fallback, SW registration (https/localhost; `?nosw=1` opt-out) |
+
+Fixed during this pass: the CDN precache used `cache.add()` on `no-cors` requests — an opaque
+response has `status: 0`, so `add` rejects and `Promise.allSettled` hid it; the two libraries
+were never precached. Now fetched with CORS and `cache.put`, and **asserted by a test**.
+
+### 1.2 Test harness, CI and deploy
+
+- `tools/lib/cdp.mjs` — dependency-free Chrome DevTools Protocol driver (Node ≥ 20, no npm install)
+- `tools/run-tests.mjs` — **43 checks**: static assets, JS parse, manifest fields, source
+  invariants, boot smoke, pure helpers, accessibility, Arabic RTL, SW registration/precache, offline render
+- `tools/smoke.mjs` — one-shot load test, fails on any console error / 4xx
+- `tools/make-icons.mjs`, `tools/screenshots.mjs`, `tools/lib/server.mjs`
+- `package.json` scripts: `serve`, `test`, `smoke`, `icons`
+- CI (`.github/workflows/ci.yml`): HTMLHint + JS syntax + headless suite; Pages deploy workflow
+- `?selftest=1` surface in `scripts/app.js` exposes pure helpers to the suite only (production untouched)
+
+### 1.3 Accessibility — the app's largest UX gap
+
+Audit baseline: 3 ARIA attributes, 0 `tabindex`, 0 `aria-live`, 0 `:focus-visible`, 0 captions,
+3 `for=` (login only), no skip link. Shipped:
+
+- **Sidebar navigation is real `<button>`s** with `aria-current="page"` and `aria-hidden` decorative glyphs
+  (previously 25 non-focusable `<div onclick>` — keyboard/AT users could not leave the first screen)
+- **Modals**: focus moves into the dialog, Tab/Shift+Tab trapped inside `.mbox`, focus restored on close,
+  `aria-labelledby` wired; Escape restores focus
+- **Feedback is announced**: `role="alert"` on login/form errors, persistent `role="status"` toast host,
+  `aria-live` on login status
+- **Forms**: `<label for="f_key">`, `aria-required`, `aria-invalid` + focus on the first invalid field
+- **Names for icon-only buttons** (☰ 🔔 🛡️ ✕ ✎ 🖨 ✓ …) via explicit labels + a render-time fallback pass
+- **Keyboard**: skip link → `#main` (`tabindex="-1"`), Escape closes notifications and the mobile drawer,
+  `aria-expanded` on both toggles
+- **Contrast tokens**: light-theme `--muted` `#6b7580 → #57606a`, new `--accent-ink` (`#a34e00` in light)
+  for text/icons, `AED` pill `1.29:1 → 7.04:1`, white-on-red fixed by dark ink on `#f85149`
+- **Layout**: global `:focus-visible` ring, removed two RTL double-flips (sidebar, modal footer),
+  logical properties (`border-inline-end`, `inset-inline-*`, `margin-inline-start`), 28px photo-delete target,
+  `prefers-reduced-motion` support
+- **Optional app shell is fully bilingual**: login aside copy, tagline, placeholders, `<title>` and RTL CTA arrow
+  now follow the language setting (previously Arabic showed English marketing copy)
+
+### 1.4 Data-integrity fixes (from the data audit)
+
+| Fix | Where |
+|---|---|
+| **P0** project-switch race: new `state._loadGen` generation guard; state is only committed if still current; failures roll back instead of leaving the new project id beside the old project's rows; project caches cleared when returning to company level | `loadProjectData`, `switchProject`, `clearProjectState` |
+| `deleteRow` verifies a row was actually removed (RLS can silently delete 0 rows) and reports it | `deleteRow` |
+| OCR bill commit writes an explicit `status` (`approved` for managers, `pending` otherwise) instead of relying on a DB default | `commitScan` |
+| Audit-write failures are surfaced ("Saved, but the audit-trail entry failed") instead of being swallowed | `logTransaction` |
+| `daysUntil` parses ISO timestamps/date objects; unparseable dates no longer render "in null d" alerts | `daysUntil`, `collectAlerts` |
+| Next IPC number parses the trailing sequence (`INV-2026-001 → PB-002`), not the first digit run | `getNextBillingNo` |
+| Unhandled promise rejections reach the (now dismissible, auto-hiding) error banner | bootstrap |
+
+---
+
+## 2. Audit backlog (still open)
+
+Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·
+[`arch-perf.md`](audits/arch-perf.md). Line numbers there refer to the **pre-fix** baseline.
+
+### Blockers that need your input / live project access
+
+| # | Item | Why it needs you |
+|---|---|---|
+| A | **RLS as code + CI denial tests** (arch P0) | The committed anon key is public by design; authorization lives entirely in Postgres RLS, and nothing in-repo defines or tests it. `changeRole` also updates `profiles.role` from the browser — a self-promotion path if column-level RLS is absent. Needs database/schema access. |
+| B | **Row-level scoping of `company_id`** (data #20) | Several loaders/inserts omit `company_id`; whether that leaks cross-company data depends on RLS. Unverifiable from source. |
+| C | **`ev_pct`/`pv_pct` scale** (data #19) | Dashboard EV/PV math differs if those columns are 0–100 rather than 0–1. Needs the schema. |
+| D | **Product direction** | Which matters more next: field-offline data (IndexedDB snapshot + write outbox), richer reports, or multi-project approvals? |
+
+### High-value, no-input-needed
+
+| Priority | Item | Effort |
+|---|---|---|
+| P1 | `fetchAllRows` returns `{rows,error}`; loaders keep prior state and show a retry banner instead of silently zeroing totals | M |
+| P1 | Wire optimistic concurrency: keep `updated_at` in mappers, pass it from editors, `status='pending'` CAS on approvals | M |
+| P1 | SRI hashes (or vendor) the CDN libraries; lazy-load SheetJS on first import/export (removes a 703 ms blocking request) | S–M |
+| P1 | `fetchJson()` helper with `AbortController` timeouts for the 5 raw `fetch` sites (server OCR, admin ops) | S |
+| P2 | Render only `#main`/`<tbody>` after mutations; debounce the two search inputs; page history/expenses (100 + "load more") | M |
+| P2 | Company-level approvals queue from a cross-project `status='pending'` query; record approver per row | M |
+| P2 | One print-window builder (5 duplicated document builders, popups never closed) | S–M |
+| P2 | i18n: ~234 hardcoded English strings, 33 toasts, 18 `confirm()` prompts; locale-aware dates/currency (`Intl`) | L |
+| P3 | Single version source (title/overlay `v28`, package `29.0.0`, CHANGELOG `29.0.0`); fill/drop CHANGELOG `[28.2]` placeholder | S |
+| P3 | Move `apply_all.py` / `fix_anchors.py` to `tools/historical/` (or delete; git history is the archive) | S |
+
+---
+
+## 3. Recommended next phases
+
+1. **Authorization you can prove** — RLS migrations + a CI job that signs in as anon/lead/super and asserts
+   denials (`profiles`, `payroll_batches`, `company_budget_lines`, `profiles.role` self-update); route
+   `changeRole` through the existing `adminOp` edge function. This is the only way the public anon key stops
+   being a risk and becomes a documented property.
+2. **Failure visibility** — `fetchAllRows` contract change + retry banner, `fetchJson` timeouts, offline state
+   that disables submit instead of implying queued writes.
+3. **Field-offline data** — IndexedDB snapshot of the current project for read-only offline viewing, then an
+   outbox for writes with conflict reporting (uses the `updated_at` concurrency work).
+4. **Rendering performance** — region/`<tbody>` re-render + search debounce + paging (measured: Compliance
+   206 KB / 7,026 elements, Timesheets 134 KB / 4,816 per full rebuild).
+5. **i18n completion** — LANG keys for the remaining literals, `Intl` formatting, `confirm()` → modal.
+
+---
+
+## 4. Verify
+
+```bash
+npm run serve      # http://127.0.0.1:8899
+npm test           # 43 checks, headless Chrome, self-contained
+npm run smoke      # single load, fails on console errors / 4xx
+npm run icons      # regenerate icons/*.png from icons/icon.svg
+```
+
+HTML lint (as CI runs it): `npx --yes htmlhint@1 "index.html"`.
+
+> Note: the audit reports were written against the pre-fix tree. They remain the backlog of
+> record; line numbers drift after this branch, so match on function names, not line numbers.
