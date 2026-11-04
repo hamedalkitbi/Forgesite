@@ -6,12 +6,12 @@
  *   pinned CDN GET  -> cache-first (SheetJS / supabase-js are version-pinned URLs)
  *   everything else -> straight to network (Supabase REST/auth/realtime is NEVER cached)
  *
- * Bump VERSION whenever index.html, scripts/app.js or styles/main.css change in a way
- * that must invalidate the shell cache. Old caches are pruned on activate.
+ * Bump VERSION whenever index.html, scripts/app.js, module scripts or styles/main.css
+ * change in a way that must invalidate the shell cache. Old caches are pruned on activate.
  */
 'use strict';
 
-var VERSION = 'v29.2.0-1';
+var VERSION = 'v29.2.0-2';
 var CACHE = 'forgesite-' + VERSION;
 
 var CORE = [
@@ -19,6 +19,10 @@ var CORE = [
   './index.html',
   './styles/main.css',
   './scripts/app.js',
+  './scripts/modules/payment-requests.js',
+  './scripts/modules/finance-statements.js',
+  './scripts/modules/payslips.js',
+  './scripts/modules/workflow-upgrades.js',
   './site.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
