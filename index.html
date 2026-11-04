@@ -16,7 +16,7 @@
 <link rel="dns-prefetch" href="https://dxopfnsvslvqunaptzgp.supabase.co">
 <link rel="stylesheet" href="styles/main.css">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" crossorigin="anonymous" onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';document.head.appendChild(s);"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js" crossorigin="anonymous" onerror="var s=document.createElement('script');s.src='https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';s.crossOrigin='anonymous';document.head.appendChild(s);"></script>
 </head>
 <body>
 
@@ -52,7 +52,7 @@
         </div>
         <div id="loginStatus" aria-live="polite"></div>
         <div id="loginError" class="login-error" role="alert" aria-live="assertive"></div>
-        <button type="submit" class="login-btn" id="loginBtn" onclick="event.preventDefault();if(window.doLogin){window.doLogin();}else{document.getElementById('loginError').textContent='❌ App script not initialized.';}return false;">Sign In →</button>
+        <button type="submit" class="login-btn" id="loginBtn" onclick="event.preventDefault();if(window.doLogin){window.doLogin();}else{document.getElementById('loginError').textContent='❌ App scripts have not loaded.';}">Sign In</button>
       </form>
     </div>
   </div>
@@ -88,6 +88,7 @@
 <script src="scripts/modules/payment-requests.js"></script>
 <script src="scripts/modules/finance-statements.js"></script>
 <script src="scripts/modules/payslips.js"></script>
+<script src="scripts/modules/workflow-upgrades.js"></script>
 <noscript><p style="padding:24px;font-family:system-ui,sans-serif">SiteForge ERP needs JavaScript enabled to run.</p></noscript>
 <script>
 /* Offline app shell: register the service worker on https or localhost. Add ?nosw=1 to disable. */
