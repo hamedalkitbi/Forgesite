@@ -327,6 +327,7 @@ async function loadCompanyData(){
   state.complianceDocs=r[4];
   state.suppliers=r[5]||[];
   state.approvalLimits=r[6]||[];
+  if(window.SF&&window.SF.retention&&window.SF.retention.refresh){try{await window.SF.retention.refresh();}catch(e){}}
   state.closedPeriods=r[7]||[];
   state.attachmentRules=r[8]||[];
   state.approvalSla=(r[9]&&r[9][0])||null;
@@ -3929,6 +3930,13 @@ window.SF.ui.openApprovalsInbox=function(){window._appInbox='forme';window._appF
 window.SF.periods={list:closedPeriodsOf,isClosed:isPeriodClosed,close:async function(period,reason){await insertRow('closed_periods',{company_id:state.company?state.company.id:null,period:period,closed_by:userProfile?userProfile.name:null,reason:reason||null});await loadCompanyData();},reopen:async function(period){var rows=closedPeriodsOf().filter(function(p){return p.period===period;});for(var i=0;i<rows.length;i++){await deleteRow('closed_periods',rows[i].id);}await loadCompanyData();}};
 window.SF.grn={list:function(){return state.grn||[];},receivedQty:grnReceivedQty,matched:grnMatched,forMaterial:function(mid){return (state.grn||[]).filter(function(g){return g.material_id===mid;});},guard:grnMatched,guardPayment:grnMatchedForPayment,add:async function(g){return await insertRow('goods_received_notes',Object.assign({project_id:state.currentProjectId},g));}};
 window.SF.attachments={list:listAttachments,upload:uploadAttachment,remove:removeAttachment,requiredFor:attachmentRequiredFor};
+window.SF.retention={
+  _releasedTotal:0,
+  refresh:async function(){if(!supabase)return;try{var r=await supabase.from('retention_releases').select('amount_aed');if(!r.error&&r.data){var t=0;r.data.forEach(function(x){t+=Number(x.amount_aed)||0;});window.SF.retention._releasedTotal=Math.round(t*100)/100;}}catch(e){}},
+  releasedTotal:async function(){await window.SF.retention.refresh();return window.SF.retention._releasedTotal;},
+  released:async function(projectId){if(!supabase)return 0;var r=await supabase.from('retention_releases').select('amount_aed').eq('project_id',projectId);if(r.error||!r.data)return 0;var t=0;r.data.forEach(function(x){t+=Number(x.amount_aed)||0;});return Math.round(t*100)/100;},
+  open:async function(projectId){var retained=(state.billings||[]).filter(function(b){return b.status==='certified'||b.status==='paid';}).reduce(function(s,b){return s+(Number(b.retentionAmount)||0);},0);var rel=await window.SF.retention.released(projectId);return Math.round((retained-rel)*100)/100;}
+};
 window.SF.sla={get:function(){return state.approvalSla||{sla_days:3};},days:function(){var o=state.approvalSla||{};return Number(o.sla_days!=null?o.sla_days:3);},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
 
 console.log('[SiteForge v29.5] ready · modules:',Object.keys(SFviews).join(', ')||'none');

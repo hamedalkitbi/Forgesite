@@ -832,7 +832,8 @@
     var ap = apTotals(d);
     var cf = cashFlowOf(d);
     var certified = certifiedBillings(d);
-    var retentionPayable = round2(sum(certified, function (b) { return b.retentionAmount; }));
+    var releasedRetention = Number(opts.releasedRetention || ((typeof window !== 'undefined' && window.SF && window.SF.retention && window.SF.retention._releasedTotal) || 0)) || 0;
+    var retentionPayable = round2(Math.max(0, sum(certified, function (b) { return b.retentionAmount; }) - releasedRetention));
     var vatPayable = round2(sum(certified, function (b) { return b.vatAmount; }));
     var openingCash = round2(settings.openingCash);
     var openingEquity = round2(settings.openingEquity);
