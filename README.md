@@ -52,6 +52,7 @@ there is no local/demo mode.
 | `docs/modules/` | Module contract (`CONTRACT.md`) and per-feature notes |
 | `tools/` | Zero-dependency dev tooling: tests, smoke test, icon renderer, screenshots, CDP lib |
 | `docs/` | `ENHANCEMENTS.md` (shipped + backlog), `audits/` (data, UX/a11y, architecture), `screenshots/` |
+| `docs/guides/` | Role-by-role day guides with screenshots ([index](docs/guides/README.md)) |
 | `.github/workflows/` | `ci.yml` (lint + headless tests), `pages.yml` (GitHub Pages deploy) |
 | `apply_all.py`, `fix_anchors.py` | **Historical** patch scripts — see below |
 
