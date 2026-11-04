@@ -290,7 +290,7 @@ begin
 
   -- 3. Limits of authority: director unlimited; controller needs a limit row
   --    (fail closed when absent).
-  if v_role = 'controller' then
+  if v_role in ('controller', 'super') then
     if not exists (
       select 1
       from public.approval_limits al
@@ -433,7 +433,7 @@ begin
   end if;
 
   -- 3. Limits of authority.
-  if v_role = 'controller' then
+  if v_role in ('controller', 'super') then
     if not exists (
       select 1
       from public.approval_limits al
