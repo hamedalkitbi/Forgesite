@@ -3,6 +3,24 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [29.5.0] - 2026-11-04
+
+### Added
+- **Approval evidence attachments**: upload invoices/delivery notes/photo evidence on any
+  approval record; amount-based rules (per table) require evidence above a threshold before
+  approval; attachments list/delete with the uploader-only rule
+- **Period close / lock**: directors close a month (with reason) and dated writes to that month
+  are rejected by both the app and a DB trigger; reopen when needed
+- **Approval SLA + escalation**: per-company SLA (days) and `sf_escalate_overdue()` that flags
+  overdue pending records; approvals queue gains an Overdue filter and age colouring
+- **3-way match**: Goods Received Notes (`goods_received_notes` + `sf_material_grn`); PO billing
+  and marking a supplier invoice paid are blocked until the goods receipt covers the PO
+- Receiving / GRN module (project nav, received vs ordered qty, match badges)
+- Migration `202611050002_phase2_workflow.sql` (tables, RPCs, triggers, RLS)
+
+### Changed
+- Version 29.5.0; service-worker cache `v29.5.0-1`
+
 ## [29.4.0] - 2026-11-04
 
 ### Added

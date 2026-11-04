@@ -395,6 +395,26 @@ export const MOCK_SOURCE = String.raw`(function () {
     { id: sid('i', 4), company_id: companyId, project_id: projectA, table_name: 'materials', record_id: sid('c', 3), action: 'approve', from_status: 'pending', to_status: 'approved', amount_aed: 72500, actor_id: profiles.director.id, actor_name: 'Hamed Al Kitbi', actor_role: 'director', reason: null, before_data: { status: 'pending' }, after_data: { status: 'approved' }, created_at: offsetTs(-28) }
   ];
 
+  /* Phase 2 — evidence, period close, SLA escalation, 3-way match.
+     Mirrors supabase/migrations/202611050002_phase2_workflow.sql. */
+  SEED.approval_attachments = [];
+
+  SEED.approval_attachment_rules = [
+    { id: sid('j', 1), company_id: companyId, table_name: 'materials', min_amount_aed: 25000 },
+    { id: sid('j', 2), company_id: companyId, table_name: 'change_orders', min_amount_aed: 10000 },
+    { id: sid('j', 3), company_id: companyId, table_name: 'payment_requests', min_amount_aed: 50000 },
+    { id: sid('j', 4), company_id: companyId, table_name: 'company_expenses', min_amount_aed: 5000 },
+    { id: sid('j', 5), company_id: companyId, table_name: 'timesheets', min_amount_aed: 0 }
+  ];
+
+  SEED.closed_periods = [];
+
+  SEED.approval_sla = [
+    { id: sid('j', 6), company_id: companyId, sla_days: 3, escalate_to: 'director', updated_at: offsetTs(-120) }
+  ];
+
+  SEED.goods_received_notes = [];
+
   var DB = {};
   Object.keys(SEED).forEach(function (table) { DB[table] = clone(SEED[table]); });
   var INITIAL_COPY = clone(DB);
@@ -546,6 +566,39 @@ export const MOCK_SOURCE = String.raw`(function () {
     return { data: null, error: { message: message, details: null, hint: null, code: code || 'MOCK_ERROR' }, count: null, status: status || 400 };
   }
 
+  /* Phase 2 — closed-period guard (simulates the sf_guard_closed_period trigger).
+     A BEFORE INSERT OR UPDATE trigger on the six dated tables raises CLOSED_PERIOD
+     when the row's period is in closed_periods for its company. We mirror that here
+     by rejecting insert/update/upsert into a closed month. */
+  var DATED_TABLES = {
+    timesheets: 'work_date',
+    company_expenses: 'expense_date',
+    payments: 'paid_date',
+    payroll_batches: 'period',
+    progress_billings: 'period_from',
+    materials: 'invoice_date'
+  };
+  function periodClosedFor(table, row) {
+    var dateCol = DATED_TABLES[table];
+    if (!dateCol) return null;
+    var dateVal = row[dateCol];
+    if ((dateVal === null || dateVal === undefined) && table === 'payments') dateVal = row.due_date;
+    if (dateVal === null || dateVal === undefined || dateVal === '') return null;
+    var period = String(dateVal).slice(0, 7);
+    if (period.length < 7) return null;
+    var companyId = row.company_id;
+    if (companyId === null || companyId === undefined) companyId = recordCompanyId(row);
+    if (companyId === null || companyId === undefined) return null;
+    var closed = DB.closed_periods || [];
+    for (var i = 0; i < closed.length; i += 1) {
+      if (norm(closed[i].company_id) === norm(companyId) && norm(closed[i].period) === norm(period)) return period;
+    }
+    return null;
+  }
+  function closedPeriodError(table, period) {
+    return errorResult('CLOSED_PERIOD: cannot write "' + table + '" for closed period ' + period, 'CLOSED_PERIOD', 400);
+  }
+
   function makeBuilder(tableName) {
     var q = {
       action: 'select',
@@ -596,6 +649,12 @@ export const MOCK_SOURCE = String.raw`(function () {
 
     function executeInsert() {
       var items = Array.isArray(q.payload) ? q.payload : [q.payload];
+      for (var i = 0; i < items.length; i += 1) {
+        if (items[i] && typeof items[i] === 'object') {
+          var closedPeriod = periodClosedFor(tableName, items[i]);
+          if (closedPeriod) return closedPeriodError(tableName, closedPeriod);
+        }
+      }
       var inserted = [];
       items.forEach(function (item) {
         if (!item || typeof item !== 'object') return;
@@ -614,6 +673,24 @@ export const MOCK_SOURCE = String.raw`(function () {
         ? String(q.onConflict).split(',').map(function (s) { return s.trim(); }).filter(Boolean)
         : ['id'];
       var out = [];
+      for (var vi = 0; vi < items.length; vi += 1) {
+        var item0 = items[vi];
+        if (!item0 || typeof item0 !== 'object') continue;
+        var row0 = clone(item0);
+        var matchable0 = keys.every(function (k) { return row0[k] !== null && row0[k] !== undefined; });
+        var target0 = null;
+        if (matchable0) {
+          var tbl0 = rowsOf(tableName);
+          for (var ti = 0; ti < tbl0.length; ti += 1) {
+            var cand0 = tbl0[ti];
+            var hit0 = keys.every(function (k) { return norm(cand0[k]) === norm(row0[k]); });
+            if (hit0) { target0 = cand0; break; }
+          }
+        }
+        var eff0 = target0 ? Object.assign({}, target0, row0) : row0;
+        var closedPeriod0 = periodClosedFor(tableName, eff0);
+        if (closedPeriod0) return closedPeriodError(tableName, closedPeriod0);
+      }
       items.forEach(function (item) {
         if (!item || typeof item !== 'object') return;
         var row = clone(item);
@@ -645,8 +722,12 @@ export const MOCK_SOURCE = String.raw`(function () {
       var rows = rowsOf(tableName).filter(function (row) {
         return q.filters.every(function (f) { return matchFilter(row, f); });
       });
+      var patch = clone(q.payload || {});
+      for (var i = 0; i < rows.length; i += 1) {
+        var closedPeriod = periodClosedFor(tableName, Object.assign({}, rows[i], patch));
+        if (closedPeriod) return closedPeriodError(tableName, closedPeriod);
+      }
       var patched = rows.map(function (row) {
-        var patch = clone(q.payload || {});
         Object.keys(patch).forEach(function (k) { row[k] = patch[k]; });
         if (row.updated_at === null || row.updated_at === undefined) row.updated_at = new Date().toISOString();
         return clone(row);
@@ -958,9 +1039,84 @@ export const MOCK_SOURCE = String.raw`(function () {
 
     return { ok: true, message: 'Record ' + toStatus + '.', status: toStatus };
   }
+  /* Phase 2 RPCs — mirror sf_assert_period_open / sf_material_grn / sf_escalate_overdue. */
+  function assertPeriodOpen(args) {
+    var company = args && args.p_company;
+    var date = args && args.p_date;
+    var period = date ? String(date).slice(0, 7) : null;
+    if (company && period) {
+      var closed = DB.closed_periods || [];
+      for (var i = 0; i < closed.length; i += 1) {
+        if (norm(closed[i].company_id) === norm(company) && norm(closed[i].period) === norm(period)) {
+          return { data: null, error: { message: 'CLOSED_PERIOD: period ' + period + ' is closed', details: null, hint: null, code: 'CLOSED_PERIOD' }, status: 400 };
+        }
+      }
+    }
+    return { data: null, error: null };
+  }
+  function materialGrn(args) {
+    var mid = (args && (args.m_id !== undefined && args.m_id !== null ? args.m_id : args.p_m_id)) || null;
+    if (!mid) return { data: { received_qty: 0, matched: false }, error: null };
+    var grns = DB.goods_received_notes || [];
+    var received = 0;
+    for (var i = 0; i < grns.length; i += 1) {
+      if (norm(grns[i].material_id) === norm(mid)) received += Number(grns[i].qty_received || 0);
+    }
+    var material = null;
+    var mats = DB.materials || [];
+    for (var j = 0; j < mats.length; j += 1) {
+      if (norm(mats[j].id) === norm(mid)) { material = mats[j]; break; }
+    }
+    var ordered = material ? Number(material.quantity || 0) : 0;
+    var matched = ordered > 0 && received >= ordered;
+    return { data: { received_qty: Math.round(received * 100) / 100, matched: matched, ordered_qty: ordered }, error: null };
+  }
+  function escalateOverdue() {
+    var sla = (DB.approval_sla && DB.approval_sla[0]) || {};
+    var days = Number(sla.sla_days != null ? sla.sla_days : 3);
+    if (isNaN(days) || days < 0) days = 3;
+    var cutoff = Date.now() - days * 86400000;
+    var recipients = (DB.profiles || []).filter(function (p) { return p.role === 'director' || p.role === 'controller'; });
+    var pendingTables = ['materials', 'change_orders', 'timesheets', 'company_expenses', 'payment_requests'];
+    var created = [];
+    if (!DB.notifications) DB.notifications = [];
+    pendingTables.forEach(function (table) {
+      var rows = DB[table] || [];
+      rows.forEach(function (row) {
+        var status = row.status;
+        if (status !== 'pending' && status !== 'submitted') return;
+        var ts = row.created_at ? Date.parse(row.created_at) : NaN;
+        if (isNaN(ts) || ts > cutoff) return;
+        var key = table + ':' + row.id;
+        for (var i = 0; i < DB.notifications.length; i += 1) {
+          if (DB.notifications[i].notif_dedupe === key) return;
+        }
+        var amount = recordAmount(table, row);
+        var ageDays = Math.floor((Date.now() - ts) / 86400000);
+        var body = 'Record ' + table + ' pending AED ' + (amount === null || amount === undefined ? '—' : amount) + ' for ' + ageDays + ' days';
+        recipients.forEach(function (r) {
+          DB.notifications.push({
+            id: newUuid(),
+            user_id: r.id,
+            type: 'escalation',
+            title: 'Approval overdue',
+            body: body,
+            notif_dedupe: key,
+            is_read: false,
+            created_at: new Date().toISOString()
+          });
+        });
+        created.push(key);
+      });
+    });
+    return { data: { escalated: created.length }, error: null };
+  }
   function rpcDispatch(fn, args) {
     if (fn === 'sf_approve_record') return { data: approveDecide('approve', args || {}), error: null };
     if (fn === 'sf_reject_record') return { data: approveDecide('reject', args || {}), error: null };
+    if (fn === 'sf_assert_period_open') return assertPeriodOpen(args || {});
+    if (fn === 'sf_material_grn') return materialGrn(args || {});
+    if (fn === 'sf_escalate_overdue') return escalateOverdue();
     return { data: { fn: fn, args: args || null, mock: true }, error: null };
   }
 

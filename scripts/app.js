@@ -266,7 +266,7 @@ function applyI18nStatic(){
   if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
   var userEl=document.getElementById('loginUser');
   if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
-  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.4';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.5';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -1821,7 +1821,7 @@ window.commitPOBill=async function(matId){
   var desc=(document.getElementById('po_bill_desc').value||'').trim();
   if(!invNo)return toast('Supplier invoice number is required','bad');
   if(tot<=0)return toast('Amount must be greater than zero','bad');
-  if(!grnMatched(m))return toast('Goods receipt missing — record a GRN for this PO (Receiving) before billing','bad');
+  if(!(await grnMatched(m)))return toast('Goods receipt missing — record a GRN for this PO (Receiving) before billing','bad');
   var btn=document.querySelector('#modalRoot .btn.ok');if(btn)btn.disabled=true;
   try{
     if(sup)await ensureSupplier(sup,state.currentProjectId);
@@ -1854,7 +1854,7 @@ window.editPayment=function(id){
   openFormModal({title:t('edit')+' payment',
     values:{payment_type:p.type,invoice_no:p.invoiceNo,description:p.desc||'',amount:p.amount,due_date:p.dueDate,paid_date:p.paidDate,status:p.status,payment_method:p.method},
     fields:[{key:'payment_type',label:t('type'),required:true,type:'select',options:['received','pending','invoice']},{key:'invoice_no',label:t('invoiceNo')},{key:'description',label:t('description'),full:true},{key:'amount',label:t('amount')+' (AED)',type:'number',step:'0.01',required:true},{key:'due_date',label:t('dueDate'),type:'date'},{key:'paid_date',label:t('paidDate'),type:'date'},{key:'status',label:t('status'),type:'select',options:['pending','paid','overdue','cancelled']},{key:'payment_method',label:t('method'),type:'select',options:['Cash','Bank Transfer','Cheque','Credit Card','Other']}],
-    onSubmit:async function(d){if(d.status==='paid'&&!grnMatchedForPayment({type:d.payment_type,invoiceNo:d.invoice_no}))return toast('Goods receipt missing — record a GRN before paying this supplier invoice','bad');await updateRow('payments',id,{payment_type:d.payment_type,invoice_no:d.invoice_no||null,description:d.description,amount:Number(d.amount),due_date:d.due_date||null,paid_date:d.paid_date||null,status:d.status,payment_method:d.payment_method});await reloadProjectTable('payments','created_at',false);render();toast(t('updatedOk'),'ok');}
+    onSubmit:async function(d){if(d.status==='paid'&&!(await grnMatchedForPayment({type:d.payment_type,invoiceNo:d.invoice_no})))return toast('Goods receipt missing — record a GRN before paying this supplier invoice','bad');await updateRow('payments',id,{payment_type:d.payment_type,invoice_no:d.invoice_no||null,description:d.description,amount:Number(d.amount),due_date:d.due_date||null,paid_date:d.paid_date||null,status:d.status,payment_method:d.payment_method});await reloadProjectTable('payments','created_at',false);render();toast(t('updatedOk'),'ok');}
   });
 };
 window.deletePayment=function(id){if(!confirm('Delete?'))return;deleteRow('payments',id).then(async function(){await reloadProjectTable('payments','created_at',false);render();toast(t('deletedOk'),'ok');}).catch(function(e){toast(e.message,'bad');});};
@@ -3158,7 +3158,7 @@ function renderApprovals(el){
 function renderApprovalsTable(){
   var body=document.getElementById('approvalsBody');if(!body)return;
   var items=approvalInboxFilter(collectPendingItems(window._appFilter||'all'), window._appInbox||'all');
-  if(window._appOverdue){var slaDays=window.SF&&SF.sla?SF.sla.get():3;items=items.filter(function(it){var a=daysSince(itemCreatedAt(it));return a!=null&&a>slaDays;});}
+  if(window._appOverdue){var slaDays=window.SF&&SF.sla&&SF.sla.days?SF.sla.days():3;items=items.filter(function(it){var a=daysSince(itemCreatedAt(it));return a!=null&&a>slaDays;});}
   window._appVisible=items;
   var sel=window._appSel||{};
   body.innerHTML=items.length?items.map(function(it){
@@ -3311,7 +3311,7 @@ window.removeAttachmentAndRefresh=async function(attId,table,id){
   try{await removeAttachment(attId);toast('Attachment removed','ok');window.openAttachmentsModal(table,id);}catch(e){toast('Failed: '+((e&&e.message)||e),'bad');}
 };
 window.openPeriodsModal=async function(){
-  var slaDays=window.SF&&SF.sla?SF.sla.get():3;
+  var slaDays=window.SF&&SF.sla&&SF.sla.days?SF.sla.days():3;
   var rows=closedPeriodsOf();
   var h='<div class="card" style="margin-bottom:14px"><div style="font-weight:800;margin-bottom:6px">Approval SLA (days before overdue escalation)</div><div class="row"><input type="number" id="slaDays" min="1" value="'+slaDays+'" style="width:100px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="btn sm" onclick="saveSlaDays()">Save</button></div></div>';
   h+='<div class="card"><div style="font-weight:800;margin-bottom:10px">Closed periods</div>';
@@ -3375,15 +3375,23 @@ function attachmentRequiredFor(table,amount){
 function grnReceivedQty(materialId){
   return (state.grn||[]).filter(function(g){return g.material_id===materialId;}).reduce(function(s,g){return s+(Number(g.qty_received)||0);},0);
 }
-function grnMatched(material){
-  return grnReceivedQty(material.id)>=(Number(material.qty)||0)-0.0001;
+async function freshGrnReceivedQty(materialId){
+  if(supabase&&typeof supabase.from==='function'){
+    var r=await supabase.from('goods_received_notes').select('qty_received').eq('material_id',materialId);
+    if(!r.error&&r.data){var sum=0;r.data.forEach(function(x){sum+=(Number(x.qty_received)||0);});return sum;}
+  }
+  return grnReceivedQty(materialId);
 }
-function grnMatchedForPayment(p){
+async function grnMatched(material){
+  var q=await freshGrnReceivedQty(material.id);
+  return q>=(Number(material.qty)||0)-0.0001;
+}
+async function grnMatchedForPayment(p){
   if(!p)return true;
   if(p.type!=='invoice'&&p.type!=='pending')return true;
   var m=(state.materials||[]).find(function(x){return x.invoiceNo===p.invoiceNo;});
   if(!m)return true; // no linked PO to verify against
-  return grnMatched(m);
+  return await grnMatched(m);
 }
 
 async function updatePendingStatus(table,id,payload,expectedStatus){
@@ -3878,7 +3886,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
-  version:'v29.4',
+  version:'v29.5',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3918,9 +3926,9 @@ window.SF.suppliers={list:function(){return state.suppliers||[];},byId:function(
 window.SF.approvals={limits:function(){return state.approvalLimits||[];},eventsFor:fetchApprovalEvents,inbox:approvalInboxFilter,decide:approveViaRpc,creatorOf:itemCreator};
 window.SF.ui.openApprovalsInbox=function(){window._appInbox='forme';window._appFilter='all';goView('approvals');};
 window.SF.periods={list:closedPeriodsOf,isClosed:isPeriodClosed,close:async function(period,reason){await insertRow('closed_periods',{company_id:state.company?state.company.id:null,period:period,closed_by:userProfile?userProfile.name:null,reason:reason||null});await loadCompanyData();},reopen:async function(period){var rows=closedPeriodsOf().filter(function(p){return p.period===period;});for(var i=0;i<rows.length;i++){await deleteRow('closed_periods',rows[i].id);}await loadCompanyData();}};
-window.SF.grn={list:function(){return state.grn||[];},receivedQty:grnReceivedQty,matched:grnMatched,add:async function(g){return await insertRow('goods_received_notes',Object.assign({project_id:state.currentProjectId},g));}};
+window.SF.grn={list:function(){return state.grn||[];},receivedQty:grnReceivedQty,matched:grnMatched,forMaterial:function(mid){return (state.grn||[]).filter(function(g){return g.material_id===mid;});},guard:grnMatched,guardPayment:grnMatchedForPayment,add:async function(g){return await insertRow('goods_received_notes',Object.assign({project_id:state.currentProjectId},g));}};
 window.SF.attachments={list:listAttachments,upload:uploadAttachment,remove:removeAttachment,requiredFor:attachmentRequiredFor};
-window.SF.sla={get:function(){return (state.approvalSla&&state.approvalSla.sla_days!=null)?state.approvalSla.sla_days:3;},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
+window.SF.sla={get:function(){return state.approvalSla||{sla_days:3};},days:function(){var o=state.approvalSla||{};return Number(o.sla_days!=null?o.sla_days:3);},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
 
-console.log('[SiteForge v29.4] ready · modules:',Object.keys(SFviews).join(', ')||'none');
+console.log('[SiteForge v29.5] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();

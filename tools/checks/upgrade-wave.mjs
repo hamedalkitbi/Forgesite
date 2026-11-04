@@ -73,6 +73,9 @@ async function main() {
         const tot = Number(document.getElementById('po_bill_tot').value);
         const expectedDue = new Date(); expectedDue.setDate(expectedDue.getDate() + 30);
         const exp = expectedDue.getFullYear() + '-' + String(expectedDue.getMonth() + 1).padStart(2, '0') + '-' + String(expectedDue.getDate()).padStart(2, '0');
+        // Phase 2 3-way match: billing requires a goods receipt covering the PO.
+        await S.db.insert('goods_received_notes', { project_id: pid, material_id: row.id, reference: 'GRN-BILL-1', received_date: S.helpers.today(), qty_received: 3, received_by: 'director', status: 'received' });
+        await window.reloadProjectTable('goods_received_notes', 'received_date', false);
         await window.commitPOBill(row.id);
         await new Promise((res) => setTimeout(res, 200));
         const pays = await S.db.select('payments', { invoice_no: 'BILL-PO-BILL-1' });

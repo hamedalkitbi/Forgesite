@@ -520,6 +520,11 @@ async function runViewChecks(kit) {
       const queueHtml = await app.evaluate(`document.getElementById('main').innerHTML`);
       assert(queueHtml.indexOf('PR-001') >= 0, 'submitted payment request PR-001 missing from the Executive Approvals Queue');
       assert(/>PR</.test(queueHtml), 'queued payment request should carry the PR type tag');
+      // Phase 2: amounts above the payment_requests evidence rule require an attachment.
+      await app.evaluate(`(async () => {
+        window.__MOCK_DB.approval_attachments = window.__MOCK_DB.approval_attachments || [];
+        window.__MOCK_DB.approval_attachments.push({ id: 'att-' + Date.now(), table_name: 'payment_requests', record_id: ${JSON.stringify(SEED_ROWS[0].id)}, file_path: 'attachments/payment_requests/evidence.pdf', file_name: 'evidence.pdf', file_size: 1024, mime_type: 'application/pdf', uploaded_by: 'Sanjay Menon', created_at: new Date().toISOString() });
+      })()`);
       // Approve through the app's own queue path (CAS on status='submitted').
       await app.evaluate(`(async () => { await window.approveItem('payment_requests', ${JSON.stringify(SEED_ROWS[0].id)}); return true; })()`);
       await app.waitFor(async () => {

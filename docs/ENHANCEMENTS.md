@@ -156,6 +156,19 @@ Verified by `node tools/checks/upgrade-wave.mjs` (11 checks) plus the existing 2
 
 Verified by `tools/checks/phase1.mjs` (15) and `tools/checks/suppliers.mjs` (12).
 
+## 1.8 Phase 2 — evidence, period close, SLA, 3-way match (v29.5)
+
+- Evidence attachments (`approval_attachments` + per-table amount rules) with uploader-only
+  delete; above-threshold approvals require evidence.
+- Period close (`closed_periods`) enforced by the app guard and DB triggers on the six dated
+  tables; directors close/reopen from the queue header.
+- Approval SLA (`approval_sla`) + `sf_escalate_overdue()` (and optional pg_cron) + Overdue filter.
+- 3-way match: Goods Received Notes (`goods_received_notes`, `sf_material_grn`) gate PO billing
+  and supplier payment; Receiving/GRN module shows received vs ordered with match badges.
+- Migration `202611050002_phase2_workflow.sql`.
+
+Verified by `tools/checks/phase2.mjs` (16) and `tools/checks/grn.mjs` (10).
+
 ## 2. Audit backlog (still open)
 
 Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·
@@ -231,6 +244,7 @@ HTML lint (as CI runs it): `npx --yes htmlhint@1 "index.html"`.
 | `202611031004_po_approvals_and_site_photos.sql` | approver columns, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
 | `202611041001_worker_links_and_payroll.sql` | `timesheets.worker_id` + payroll/receivables indexes (v29.3) |
 | `202611050001_phase1_accountability.sql` | suppliers master, approval limits + events, server-side RPC approvals, RLS (v29.4) |
+| `202611050002_phase2_workflow.sql` | evidence attachments, closed periods, approval SLA + escalation, goods received notes (v29.5) |
 
 Run them in the Supabase SQL editor. Until then the three modules show a migration hint card and
 the rest of the app is unaffected. RLS hardening (making the public anon key safe) is still the
