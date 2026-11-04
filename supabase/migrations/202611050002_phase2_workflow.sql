@@ -99,7 +99,7 @@ create table if not exists public.approval_sla (
 create table if not exists public.goods_received_notes (
   id            uuid primary key default gen_random_uuid(),
   project_id    uuid references public.projects(id) on delete cascade,
-  material_id   uuid references public.materials(id) on delete set null,
+  material_id   text,  -- materials.id is TEXT in this deployment (no FK; app joins by value)
   supplier_id   uuid references public.suppliers(id) on delete set null,
   reference     text not null,   -- GRN-0001 (unique per project, enforced by the app)
   received_date date not null,
@@ -247,7 +247,7 @@ $$;
 
 -- 3-way match: total received qty for a material and whether it is fully
 -- received (received >= ordered). {"received_qty":…, "matched":bool}
-create or replace function public.sf_material_grn(m_id uuid)
+create or replace function public.sf_material_grn(m_id text)
 returns jsonb
 language plpgsql
 stable
