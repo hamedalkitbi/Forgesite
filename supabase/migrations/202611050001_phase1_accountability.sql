@@ -137,6 +137,30 @@ create index if not exists approval_events_table_record_idx
   on public.approval_events (table_name, record_id, created_at desc);
 
 -- ----------------------------------------------------------------------------
+-- 1.6 Seed default limits of authority (idempotent).
+--     The RPC fails closed, so a fresh install with zero approval_limits rows
+--     would lock controllers (and super) out of every decision. Seed sensible
+--     defaults per company: controller 100,000 AED on all six approval tables,
+--     super 25,000 AED. Director is unlimited and needs no row.
+-- ----------------------------------------------------------------------------
+insert into public.approval_limits (company_id, role, table_name, max_amount_aed)
+select c.id, r.role, t.table_name, r.max_amount_aed
+from public.companies c
+cross join (values
+  ('controller', 100000::numeric(14,2)),
+  ('super',     25000::numeric(14,2))
+) as r(role, max_amount_aed)
+cross join (values
+  ('materials'),
+  ('boq_items'),
+  ('change_orders'),
+  ('timesheets'),
+  ('company_expenses'),
+  ('payment_requests')
+) as t(table_name)
+on conflict (company_id, role, table_name) do nothing;
+
+-- ----------------------------------------------------------------------------
 -- 2. Creator columns for segregation of duties
 -- ----------------------------------------------------------------------------
 alter table public.materials        add column if not exists created_by text;
