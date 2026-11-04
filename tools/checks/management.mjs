@@ -134,14 +134,15 @@ async function testkitChecks() {
       })()`);
       // Seeded fixtures: one unlinked material (Safety First 18,500), two committed
       // POs (Ordered 240,000 + In Transit 40,800), and PB-001 (310,000) + PB-002
-      // (465,000) certified/paid retention with no releases.
+      // (465,000) certified/paid retention = 775,000, less two seeded releases
+      // (150,000 + 75,000) = 225,000 → open 550,000.
       assertEqual(r.unlinkedCount, 1, 'unlinked material count');
       assertEqual(r.unlinkedValue, 18500, 'unlinked material value');
       assertEqual(r.committedCount, 2, 'committed undelivered PO count');
       assertEqual(r.committedValue, 280800, 'committed undelivered PO value');
       assertEqual(r.retained, 775000, 'total retained');
-      assertEqual(r.released, 0, 'released (no retention_releases in mock)');
-      assertEqual(r.open, 775000, 'open retention');
+      assertEqual(r.released, 225000, 'released (two seeded retention_releases)');
+      assertEqual(r.open, 550000, 'open retention');
     });
   });
 

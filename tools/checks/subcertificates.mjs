@@ -133,13 +133,12 @@ async function testkitChecks() {
       const r = await evaluate(`(async function () {
         var m = window.SF_modules && window.SF_modules.subcertificates;
         if (!m) return null;
-        var projectId = ${JSON.stringify(ids.project)};
         var compute = m.compute(3.5, 200);
         var ref = m.nextReference([{reference:'SC-0001'}]);
         var created = await m.create({ boq_item_id: ${JSON.stringify(ids.boq)}, supplier_id: ${JSON.stringify(ids.supplier)}, measured_qty: 3.5, rate_aed: 200 });
         var certId = created.ok ? created.row.id : null;
         var certified = created.ok ? await m.certify(certId) : null;
-        var cachedBeforeGen = created.ok ? (m.list().filter(function (r) { return r.id === certId; })[0] || {}) : {};
+        var dbAfterCertify = created.ok ? (await window.SF.db.client().from('subcontractor_certificates').select('*').eq('id', certId).single()) : null;
         var gen = created.ok && certified.ok ? await m.generatePaymentRequest(certId) : null;
         var certRow = created.ok ? (await window.SF.db.client().from('subcontractor_certificates').select('*').eq('id', certId).single()) : null;
         return {
@@ -149,9 +148,9 @@ async function testkitChecks() {
           createdErr: created.error && created.error.message,
           certifiedOk: !!(certified && certified.ok),
           certifiedErr: certified && certified.error && certified.error.message,
+          dbStatusAfterCertify: dbAfterCertify && dbAfterCertify.data && dbAfterCertify.data.status,
           genOk: !!(gen && gen.ok),
           genErr: gen && gen.error && gen.error.message,
-          cachedStatusBeforeGen: cachedBeforeGen.status,
           prId: gen && gen.paymentRequest && gen.paymentRequest.id,
           certPaymentRequestId: certRow && certRow.data && certRow.data.payment_request_id,
           certStatus: certRow && certRow.data && certRow.data.status
@@ -160,9 +159,10 @@ async function testkitChecks() {
       assert(r, 'window.SF_modules.subcertificates missing');
       assertEqual(r.compute, 700, 'compute(3.5, 200) must equal 700');
       assertEqual(r.ref, 'SC-0002', 'nextReference after SC-0001 must be SC-0002');
-      assertEqual(r.createdOk, true, 'create must succeed');
+      assertEqual(r.createdOk, true, 'create must succeed' + (r.createdErr ? ' — ' + r.createdErr : ''));
       assertEqual(r.certifiedOk, true, 'certify must succeed (director)' + (r.certifiedErr ? ' — ' + r.certifiedErr : ''));
-      assertEqual(r.genOk, true, 'generatePaymentRequest must succeed' + (r.genErr ? ' — ' + r.genErr : '') + ' (cached status before gen: ' + r.cachedStatusBeforeGen + ')');
+      assertEqual(r.dbStatusAfterCertify, 'certified', 'certificate must be certified in the DB after certify');
+      assertEqual(r.genOk, true, 'generatePaymentRequest must succeed' + (r.genErr ? ' — ' + r.genErr : ''));
       assertEqual(r.certPaymentRequestId, r.prId, 'certificate must link the inserted payment request id');
       assertEqual(r.certStatus, 'certified', 'certificate status must be certified');
     });

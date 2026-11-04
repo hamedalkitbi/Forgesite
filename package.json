@@ -10,8 +10,8 @@
     "test": "node tools/run-tests.mjs",
     "icons": "node tools/make-icons.mjs",
     "test:views": "node tools/tests/app-views.mjs",
-    "test:features": "node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs && node tools/checks/suppliers.mjs && node tools/checks/grn.mjs && node tools/checks/phase1.mjs && node tools/checks/phase2.mjs && node tools/checks/phase3.mjs",
-    "test:all": "node tools/run-tests.mjs && node tools/tests/app-views.mjs && node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs && node tools/checks/suppliers.mjs && node tools/checks/grn.mjs && node tools/checks/phase1.mjs && node tools/checks/phase2.mjs && node tools/checks/phase3.mjs",
+    "test:features": "node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs && node tools/checks/suppliers.mjs && node tools/checks/grn.mjs && node tools/checks/retention.mjs && node tools/checks/subcertificates.mjs && node tools/checks/management.mjs && node tools/checks/phase1.mjs && node tools/checks/phase2.mjs && node tools/checks/phase3.mjs",
+    "test:all": "node tools/run-tests.mjs && node tools/tests/app-views.mjs && node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs && node tools/checks/suppliers.mjs && node tools/checks/grn.mjs && node tools/checks/retention.mjs && node tools/checks/subcertificates.mjs && node tools/checks/management.mjs && node tools/checks/phase1.mjs && node tools/checks/phase2.mjs && node tools/checks/phase3.mjs",
     "screenshots": "node tools/screenshots.mjs && node tools/screenshots-modules.mjs"
   },
   "engines": {
