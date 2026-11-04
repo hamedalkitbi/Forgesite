@@ -82,6 +82,7 @@ Run the SQL files in `supabase/migrations/` **in filename order** in the Supabas
 | `202611031003_payslips.sql` | `payslips` table + RLS |
 | `202611031004_po_approvals_and_site_photos.sql` | approver columns for BOQ/POs/change orders/expenses/timesheets, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
 | `202611041001_worker_links_and_payroll.sql` | `timesheets.worker_id` link + payroll/receivables indexes |
+| `202611050001_phase1_accountability.sql` | suppliers master, approval limits + events, server-side RPC approvals, RLS |
 
 Until a migration is applied, its module shows a "needs a database update" card naming the file
 — nothing else in the app breaks.

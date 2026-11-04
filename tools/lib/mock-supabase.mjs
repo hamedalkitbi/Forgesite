@@ -357,6 +357,44 @@ export const MOCK_SOURCE = String.raw`(function () {
 
   SEED.password_reset_requests = [];
 
+  /* Phase 1 — global supplier/contractor master + limits of authority + append-only
+     approval log. Mirrors supabase/migrations/202611050001_phase1_accountability.sql. */
+  SEED.suppliers = [
+    { id: sid('g', 1), company_id: companyId, name: 'Emirates Ready Mix', kind: 'supplier', trade: 'Concrete', trn: '100789012000003', contact_person: 'Omar Farooq', phone: '+971 4 885 2200', email: 'sales@emiratesreadymix.ae', address: 'Al Aweer, Dubai', bank_name: 'Emirates NBD', iban: 'AE07 0260 0010 1234 5678 901', account_no: '012345678901', payment_terms_days: 30, vat_pct: 5, status: 'active', created_by: 'Fatima Al Mansoori', created_at: offsetTs(-190), updated_at: offsetTs(-10) },
+    { id: sid('g', 2), company_id: companyId, name: 'Al Ghurair Steel', kind: 'supplier', trade: 'Structural steel', trn: '100456112000003', contact_person: 'Ahmad Al Ghurair', phone: '+971 4 332 7788', email: 'sales@alghurairsteel.ae', address: 'Al Quoz, Dubai', bank_name: 'ADCB', iban: 'AE09 0030 0011 2233 4455 667', account_no: '022334455667', payment_terms_days: 45, vat_pct: 5, status: 'active', created_by: 'Hamed Al Kitbi', created_at: offsetTs(-180), updated_at: offsetTs(-5) },
+    { id: sid('g', 3), company_id: companyId, name: 'Gulf Sand & Aggregate', kind: 'supplier', trade: 'Aggregates', trn: '100654987000003', contact_person: 'Rajesh Nair', phone: '+971 4 559 8800', email: 'orders@gulfaggregate.ae', address: 'Ras Al Khor, Dubai', bank_name: 'FAB', iban: 'AE15 0035 0012 9988 7766 554', account_no: '039988776655', payment_terms_days: 30, vat_pct: 5, status: 'active', created_by: 'Fatima Al Mansoori', created_at: offsetTs(-170), updated_at: offsetTs(-5) },
+    { id: sid('g', 4), company_id: companyId, name: 'Rapid MEP Works LLC', kind: 'subcontractor', trade: 'MEP subcontracting', trn: '100741852000003', contact_person: 'Sanjay Menon', phone: '+971 55 401 7788', email: 'sanjay@rapidmep.ae', address: 'Ras Al Khor, Dubai', bank_name: 'Mashreq', iban: 'AE17 0040 0013 5566 7788 990', account_no: '045566778899', payment_terms_days: 30, vat_pct: 5, status: 'active', created_by: 'Hamed Al Kitbi', created_at: offsetTs(-190), updated_at: offsetTs(-5) },
+    { id: sid('g', 5), company_id: companyId, name: 'Danube Electricals', kind: 'supplier', trade: 'Electrical', trn: '100789456000003', contact_person: 'Imran Sheikh', phone: '+971 4 667 8899', email: 'trade@danubeelectrical.ae', address: 'Deira, Dubai', bank_name: 'Emirates NBD', iban: 'AE20 0260 0014 7788 9900 112', account_no: '057788990011', payment_terms_days: 30, vat_pct: 5, status: 'active', created_by: 'Fatima Al Mansoori', created_at: offsetTs(-150), updated_at: offsetTs(-5) },
+    { id: sid('g', 6), company_id: companyId, name: 'Al Quoz Block Factory', kind: 'supplier', trade: 'Blocks', trn: '100333444000003', contact_person: 'Mohammed Iqbal', phone: '+971 4 444 5566', email: 'sales@alquozblocks.ae', address: 'Al Quoz, Dubai', bank_name: 'ADCB', iban: 'AE09 0030 0015 1122 3344 556', account_no: '061122334455', payment_terms_days: 30, vat_pct: 5, status: 'inactive', created_by: 'Hamed Al Kitbi', created_at: offsetTs(-140), updated_at: offsetTs(-60) }
+  ];
+
+  SEED.project_suppliers = [
+    { project_id: projectA, supplier_id: sid('g', 1), contract_amount_aed: 1850000, reference: 'SUP-ERM-001', notes: 'Ready-mix supply for foundations and frame' },
+    { project_id: projectA, supplier_id: sid('g', 2), contract_amount_aed: 2100000, reference: 'SUP-AGS-001', notes: 'Structural steel package' },
+    { project_id: projectA, supplier_id: sid('g', 3), contract_amount_aed: 240000, reference: 'SUP-GSA-001', notes: 'Aggregate and hardcore fill' },
+    { project_id: projectA, supplier_id: sid('g', 4), contract_amount_aed: 960000, reference: 'SUB-RMW-001', notes: 'MEP subcontract' },
+    { project_id: projectB, supplier_id: sid('g', 1), contract_amount_aed: 180000, reference: 'SUP-ERM-201', notes: 'Concrete for raft' }
+  ];
+
+  /* Default limits of authority — mirrors the migration's seed exactly: controller
+     100,000 AED and super 25,000 AED on all six approval tables (director is
+     unlimited and needs no row). */
+  (function () {
+    var tables = ['materials', 'boq_items', 'change_orders', 'timesheets', 'company_expenses', 'payment_requests'];
+    var rows = [];
+    var n = 0;
+    tables.forEach(function (t) { n += 1; rows.push({ id: sid('h', n), company_id: companyId, role: 'controller', table_name: t, max_amount_aed: 100000 }); });
+    tables.forEach(function (t) { n += 1; rows.push({ id: sid('h', n), company_id: companyId, role: 'super', table_name: t, max_amount_aed: 25000 }); });
+    SEED.approval_limits = rows;
+  })();
+
+  SEED.approval_events = [
+    { id: sid('i', 1), company_id: companyId, project_id: projectA, table_name: 'payment_requests', record_id: sid('a', 42), action: 'approve', from_status: 'submitted', to_status: 'approved', amount_aed: 96500, actor_id: profiles.controller.id, actor_name: 'Fatima Al Mansoori', actor_role: 'controller', reason: null, before_data: { status: 'submitted' }, after_data: { status: 'approved' }, created_at: offsetTs(-6) },
+    { id: sid('i', 2), company_id: companyId, project_id: projectA, table_name: 'payment_requests', record_id: sid('a', 43), action: 'approve', from_status: 'submitted', to_status: 'approved', amount_aed: 140600, actor_id: profiles.director.id, actor_name: 'Hamed Al Kitbi', actor_role: 'director', reason: null, before_data: { status: 'submitted' }, after_data: { status: 'approved' }, created_at: offsetTs(-24) },
+    { id: sid('i', 3), company_id: companyId, project_id: projectA, table_name: 'payment_requests', record_id: sid('a', 45), action: 'reject', from_status: 'submitted', to_status: 'rejected', amount_aed: 30875, actor_id: profiles.director.id, actor_name: 'Hamed Al Kitbi', actor_role: 'director', reason: 'Not in approved scope - submit as a variation order.', before_data: { status: 'submitted' }, after_data: { status: 'rejected' }, created_at: offsetTs(-4) },
+    { id: sid('i', 4), company_id: companyId, project_id: projectA, table_name: 'materials', record_id: sid('c', 3), action: 'approve', from_status: 'pending', to_status: 'approved', amount_aed: 72500, actor_id: profiles.director.id, actor_name: 'Hamed Al Kitbi', actor_role: 'director', reason: null, before_data: { status: 'pending' }, after_data: { status: 'approved' }, created_at: offsetTs(-28) }
+  ];
+
   var DB = {};
   Object.keys(SEED).forEach(function (table) { DB[table] = clone(SEED[table]); });
   var INITIAL_COPY = clone(DB);
@@ -801,6 +839,132 @@ export const MOCK_SOURCE = String.raw`(function () {
   };
 
   /* ========================================================================
+     RPC mock — server-side approval enforcement (Phase 1 accountability)
+     ======================================================================== */
+  function currentProfile() {
+    if (!authSession || !authSession.user) return null;
+    var rows = DB.profiles || [];
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].id === authSession.user.id) return rows[i];
+    }
+    return null;
+  }
+  function recordAmount(table, row) {
+    switch (table) {
+      case 'materials': return Number(row.quantity || 0) * Number(row.unit_cost_aed || 0);
+      case 'boq_items': return Number(row.quantity || 0) * Number(row.rate || 0);
+      case 'change_orders': return Number(row.amount || 0);
+      case 'timesheets': return Number(row.total_cost_aed || 0);
+      case 'company_expenses': return Number(row.amount || 0);
+      case 'payment_requests': return Number(row.net_aed || 0);
+      default: return null;
+    }
+  }
+  function recordCompanyId(row) {
+    if (row.company_id !== null && row.company_id !== undefined) return row.company_id;
+    if (row.project_id !== null && row.project_id !== undefined) {
+      var projects = DB.projects || [];
+      for (var i = 0; i < projects.length; i += 1) {
+        if (projects[i].id === row.project_id) return projects[i].company_id;
+      }
+    }
+    return null;
+  }
+  function approveDecide(action, args) {
+    var table = args && args.p_table;
+    var id = args && args.p_id;
+    var reason = args && args.p_reason;
+
+    /* Reject requires a reason before anything else (mirrors sf_reject_record). */
+    if (action === 'reject' && !reason) {
+      return { ok: false, message: 'A rejection reason is required.', status: null, code: 'reason_required' };
+    }
+
+    var profile = currentProfile();
+    if (!profile) return { ok: false, message: 'Not authenticated', status: null, code: 'unauthenticated' };
+    var role = profile.role;
+    if (role !== 'director' && role !== 'controller') {
+      return { ok: false, message: 'Insufficient role: only director or controller may decide records.', status: null, code: 'forbidden' };
+    }
+
+    var tableRows = DB[table] || [];
+    var row = null;
+    for (var i = 0; i < tableRows.length; i += 1) {
+      if (norm(tableRows[i].id) === norm(id)) { row = tableRows[i]; break; }
+    }
+    if (!row) return { ok: false, message: 'Record not found in ' + table + '.', status: null, code: 'not_found' };
+
+    var amount = recordAmount(table, row);
+    if (amount === null) return { ok: false, message: 'Unknown table "' + table + '".', status: null, code: 'bad_table' };
+
+    /* Limits of authority: director is unlimited; controller must have an
+       approval_limits row (fail closed) with max_amount_aed >= amount. */
+    if (role === 'controller') {
+      var companyId = recordCompanyId(row);
+      var limits = DB.approval_limits || [];
+      var allowed = false;
+      for (var j = 0; j < limits.length; j += 1) {
+        var limit = limits[j];
+        if (norm(limit.company_id) === norm(companyId) && limit.role === role && limit.table_name === table) {
+          allowed = Number(limit.max_amount_aed || 0) >= amount;
+          break;
+        }
+      }
+      if (!allowed) return { ok: false, message: 'Over limit: no approval limit authorises this amount.', status: null, code: 'over_limit' };
+    }
+
+    /* Segregation of duties: the creator may not approve their own submission. */
+    var creator = table === 'payment_requests' ? row.requested_by : row.created_by;
+    if (creator !== null && creator !== undefined && norm(creator) === norm(profile.name)) {
+      var sodMessage = action === 'reject' ? 'You cannot reject your own submission.' : 'You cannot approve your own submission.';
+      return { ok: false, message: sodMessage, status: null, code: 'sod' };
+    }
+
+    /* CAS: only pending/submitted rows may be decided (payment_requests pending status is 'submitted'). */
+    var fromStatus = row.status;
+    if (norm(fromStatus) !== 'pending' && norm(fromStatus) !== 'submitted') {
+      return { ok: false, message: 'Already decided (record is not pending/submitted).', status: null, code: 'already_decided' };
+    }
+
+    var toStatus = action === 'approve' ? 'approved' : 'rejected';
+    var rejectCol = table === 'payment_requests' ? 'rejected_reason' : 'rejection_reason';
+    row.status = toStatus;
+    row.approved_by = profile.name;
+    row.approved_at = new Date().toISOString();
+    if (action === 'reject') row[rejectCol] = reason;
+
+    var afterData = { status: toStatus };
+    if (action === 'reject') afterData.rejection_reason = reason;
+
+    if (!DB.approval_events) DB.approval_events = [];
+    DB.approval_events.push({
+      id: newUuid(),
+      company_id: recordCompanyId(row) || null,
+      project_id: row.project_id || null,
+      table_name: table,
+      record_id: id,
+      action: action,
+      from_status: fromStatus,
+      to_status: toStatus,
+      amount_aed: amount,
+      actor_id: profile.id,
+      actor_name: profile.name,
+      actor_role: role,
+      reason: reason || null,
+      before_data: { status: fromStatus },
+      after_data: afterData,
+      created_at: new Date().toISOString()
+    });
+
+    return { ok: true, message: 'Record ' + toStatus + '.', status: toStatus };
+  }
+  function rpcDispatch(fn, args) {
+    if (fn === 'sf_approve_record') return { data: approveDecide('approve', args || {}), error: null };
+    if (fn === 'sf_reject_record') return { data: approveDecide('reject', args || {}), error: null };
+    return { data: { fn: fn, args: args || null, mock: true }, error: null };
+  }
+
+  /* ========================================================================
      Install window.supabase (survives the real CDN UMD assignment)
      ======================================================================== */
   var client = {
@@ -814,7 +978,7 @@ export const MOCK_SOURCE = String.raw`(function () {
       }
     },
     rpc: function (fn, args) {
-      return Promise.resolve({ data: { fn: fn, args: args || null, mock: true }, error: null });
+      return Promise.resolve(rpcDispatch(fn, args));
     },
     channel: function () {
       var ch = {

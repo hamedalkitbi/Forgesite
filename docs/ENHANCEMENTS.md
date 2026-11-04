@@ -143,6 +143,19 @@ crash the app.
 
 Verified by `node tools/checks/upgrade-wave.mjs` (11 checks) plus the existing 231 checks.
 
+## 1.7 Phase 1 accountability + global supplier/contractor master (v29.4)
+
+- Authority moved server-side: `sf_approve_record` / `sf_reject_record` RPCs enforce role,
+  limits-of-authority (`approval_limits`, fail-closed; director unlimited), segregation of duties
+  and a `status in ('pending','submitted')` CAS, and write an append-only `approval_events` row.
+- Company-wide `suppliers` master + `project_suppliers` links, with a "Suppliers & Contractors"
+  directory module and wiring into `ensureSupplier` / PO → bill.
+- Approvals inbox (All / For me / By me) + age colouring + per-record timeline.
+- `created_by` stamped on new operational rows for SoD attribution.
+- Migration `202611050001_phase1_accountability.sql`; RLS on new + approval-critical tables.
+
+Verified by `tools/checks/phase1.mjs` (15) and `tools/checks/suppliers.mjs` (12).
+
 ## 2. Audit backlog (still open)
 
 Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·
@@ -217,6 +230,7 @@ HTML lint (as CI runs it): `npx --yes htmlhint@1 "index.html"`.
 | `202611031003_payslips.sql` | `payslips` + RLS |
 | `202611031004_po_approvals_and_site_photos.sql` | approver columns, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
 | `202611041001_worker_links_and_payroll.sql` | `timesheets.worker_id` + payroll/receivables indexes (v29.3) |
+| `202611050001_phase1_accountability.sql` | suppliers master, approval limits + events, server-side RPC approvals, RLS (v29.4) |
 
 Run them in the Supabase SQL editor. Until then the three modules show a migration hint card and
 the rest of the app is unaffected. RLS hardening (making the public anon key safe) is still the

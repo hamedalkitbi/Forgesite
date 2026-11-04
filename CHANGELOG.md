@@ -3,6 +3,23 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [29.4.0] - 2026-11-04
+
+### Added
+- **Server-side approvals (RPC)**: `sf_approve_record` / `sf_reject_record` move authority into
+  Postgres (security-definer) with segregation of duties (creator cannot approve their own
+  submission), a per-role/per-table limits-of-authority matrix (`approval_limits`, fail-closed),
+  a pending/submitted CAS (no double-approve), and an append-only `approval_events` log
+- **Global Suppliers & Contractors master** (`suppliers` + `project_suppliers`) with a company
+  directory module, project linking, and wiring into POs, `ensureSupplier` and the PO → bill flow
+- **Approvals inbox**: All / For me / By me tabs with age colouring (>3 days flagged overdue) and
+  a per-record approval timeline
+- `created_by` stamped on materials/BOQ/change orders/timesheets/expenses for SoD attribution
+- Migration `202611050001_phase1_accountability.sql` (RLS on the new + approval-critical tables)
+
+### Changed
+- Version 29.4.0; service-worker cache `v29.4.0-1`
+
 ## [29.3.0] - 2026-11-04
 
 ### Added

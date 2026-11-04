@@ -266,7 +266,7 @@ function applyI18nStatic(){
   if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
   var userEl=document.getElementById('loginUser');
   if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
-  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.3';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.4';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -3771,7 +3771,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
-  version:'v29.3',
+  version:'v29.4',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3809,6 +3809,7 @@ window.openFormModal=openFormModal;
 window.SF.db.rpc=function(name,args){return supabase.rpc(name,args||{});};
 window.SF.suppliers={list:function(){return state.suppliers||[];},byId:function(id){return (state.suppliers||[]).find(function(x){return x.id===id;});},lookup:function(name){var n=String(name||'').trim().toLowerCase();if(!n)return[];return (state.suppliers||[]).filter(function(x){return String(x.name||'').toLowerCase().indexOf(n)===0||String(x.name||'').toLowerCase().indexOf(n)>=0;});}};
 window.SF.approvals={limits:function(){return state.approvalLimits||[];},eventsFor:fetchApprovalEvents,inbox:approvalInboxFilter,decide:approveViaRpc,creatorOf:itemCreator};
+window.SF.ui.openApprovalsInbox=function(){window._appInbox='forme';window._appFilter='all';goView('approvals');};
 
-console.log('[SiteForge v29.3] ready · modules:',Object.keys(SFviews).join(', ')||'none');
+console.log('[SiteForge v29.4] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
