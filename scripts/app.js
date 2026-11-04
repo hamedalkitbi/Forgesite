@@ -32,7 +32,7 @@ var supabase=null, currentUser=null, userProfile=null;
 var state={company:null,projects:[],currentProjectId:null,currentProject:null,
   expenses:[],companyBudget:[],budget:[],timesheets:[],materials:[],payroll:[],audit:[],
   boq:[],schedule:[],payments:[],parties:[],changeOrders:[],billings:[],attachments:[],notifications:[],drawings:[],
-  siteReports:[],workers:[],complianceDocs:[],suppliers:[],approvalLimits:[]};
+  siteReports:[],workers:[],complianceDocs:[],suppliers:[],approvalLimits:[],closedPeriods:[],attachmentRules:[],approvalSla:null,grn:[]};
 var currentView='company-dash';
 
 var ROLES={
@@ -315,7 +315,10 @@ async function loadCompanyData(){
     fetchAllRows('workers',null,'staff_no',true),
     fetchAllRows('compliance_documents',null,'expiry_date',true),
     fetchAllRows('suppliers',null,'name',true),
-    fetchAllRows('approval_limits',null,null,false)
+    fetchAllRows('approval_limits',null,null,false),
+    fetchAllRows('closed_periods',null,'period',false),
+    fetchAllRows('approval_attachment_rules',null,null,false),
+    fetchAllRows('approval_sla',null,null,false)
   ]);
   state.projects=r[0];
   state.expenses=r[1];
@@ -324,6 +327,9 @@ async function loadCompanyData(){
   state.complianceDocs=r[4];
   state.suppliers=r[5]||[];
   state.approvalLimits=r[6]||[];
+  state.closedPeriods=r[7]||[];
+  state.attachmentRules=r[8]||[];
+  state.approvalSla=(r[9]&&r[9][0])||null;
 }
 
 function mapProjectTable(table,rows){
@@ -371,7 +377,8 @@ async function loadProjectData(pid){
     fetchAllRows('progress_billings',f,'created_at',false),
     fetchAllRows('attachments',f,null,true),
     fetchAllRows('drawings',f,'created_at',false),
-    fetchAllRows('site_reports',f,'report_date',false)
+    fetchAllRows('site_reports',f,'report_date',false),
+    fetchAllRows('goods_received_notes',f,'received_date',false)
   ]);
   if(gen!==state._loadGen)return false;
   state.currentProjectId=pid;state.currentProject=proj;
@@ -389,6 +396,7 @@ async function loadProjectData(pid){
   mapProjectTable('attachments',r[11]);
   mapProjectTable('drawings',r[12]);
   mapProjectTable('site_reports',r[13]);
+  state.grn=r[14]||[];
   return true;
 }
 
@@ -397,6 +405,7 @@ function openApp(){
   document.getElementById('appShell').style.display='block';
   applyBranding();applyI18nStatic();refreshProjSelector();render();
   setTimeout(function(){loadCrossProjectPending();},400);
+  setTimeout(function(){if(supabase&&typeof supabase.rpc==='function'){try{supabase.rpc('sf_escalate_overdue').catch(function(){});}catch(e){}}},800);
 }
 function refreshProjSelector(){
   var sel=document.getElementById('projSelector');
@@ -720,6 +729,7 @@ function noteDroppedColumn(table,col){
 async function insertRow(table,data){
   if(!data.id)data.id=genUUID();
   var payload=Object.assign({},data);
+  assertPeriodOpen(table,payload);
   for(var attempt=0;attempt<10;attempt++){
     var r=await supabase.from(table).insert(payload).select();
     if(!r.error){
@@ -737,6 +747,7 @@ async function updateRow(table,id,data,expectedUpdatedAt){
   var before=null;
   try{var b=await supabase.from(table).select('*').eq('id',id).single();before=b.data;}catch(e){}
   var payload=Object.assign({},data);
+  assertPeriodOpen(table,Object.assign({},before||{},payload));
   for(var attempt=0;attempt<10;attempt++){
     var q=supabase.from(table).update(payload).eq('id',id);
     if(expectedUpdatedAt)q=q.eq('updated_at',expectedUpdatedAt);
@@ -1810,6 +1821,7 @@ window.commitPOBill=async function(matId){
   var desc=(document.getElementById('po_bill_desc').value||'').trim();
   if(!invNo)return toast('Supplier invoice number is required','bad');
   if(tot<=0)return toast('Amount must be greater than zero','bad');
+  if(!grnMatched(m))return toast('Goods receipt missing — record a GRN for this PO (Receiving) before billing','bad');
   var btn=document.querySelector('#modalRoot .btn.ok');if(btn)btn.disabled=true;
   try{
     if(sup)await ensureSupplier(sup,state.currentProjectId);
@@ -1842,7 +1854,7 @@ window.editPayment=function(id){
   openFormModal({title:t('edit')+' payment',
     values:{payment_type:p.type,invoice_no:p.invoiceNo,description:p.desc||'',amount:p.amount,due_date:p.dueDate,paid_date:p.paidDate,status:p.status,payment_method:p.method},
     fields:[{key:'payment_type',label:t('type'),required:true,type:'select',options:['received','pending','invoice']},{key:'invoice_no',label:t('invoiceNo')},{key:'description',label:t('description'),full:true},{key:'amount',label:t('amount')+' (AED)',type:'number',step:'0.01',required:true},{key:'due_date',label:t('dueDate'),type:'date'},{key:'paid_date',label:t('paidDate'),type:'date'},{key:'status',label:t('status'),type:'select',options:['pending','paid','overdue','cancelled']},{key:'payment_method',label:t('method'),type:'select',options:['Cash','Bank Transfer','Cheque','Credit Card','Other']}],
-    onSubmit:async function(d){await updateRow('payments',id,{payment_type:d.payment_type,invoice_no:d.invoice_no||null,description:d.description,amount:Number(d.amount),due_date:d.due_date||null,paid_date:d.paid_date||null,status:d.status,payment_method:d.payment_method});await reloadProjectTable('payments','created_at',false);render();toast(t('updatedOk'),'ok');}
+    onSubmit:async function(d){if(d.status==='paid'&&!grnMatchedForPayment({type:d.payment_type,invoiceNo:d.invoice_no}))return toast('Goods receipt missing — record a GRN before paying this supplier invoice','bad');await updateRow('payments',id,{payment_type:d.payment_type,invoice_no:d.invoice_no||null,description:d.description,amount:Number(d.amount),due_date:d.due_date||null,paid_date:d.paid_date||null,status:d.status,payment_method:d.payment_method});await reloadProjectTable('payments','created_at',false);render();toast(t('updatedOk'),'ok');}
   });
 };
 window.deletePayment=function(id){if(!confirm('Delete?'))return;deleteRow('payments',id).then(async function(){await reloadProjectTable('payments','created_at',false);render();toast(t('deletedOk'),'ok');}).catch(function(e){toast(e.message,'bad');});};
@@ -3131,6 +3143,8 @@ function renderApprovals(el){
       '<button class="btn '+(window._appInbox==='all'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'all\')">Inbox: All</button>'+
       '<button class="btn '+(window._appInbox==='forme'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'forme\')">For me</button>'+
       '<button class="btn '+(window._appInbox==='byme'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'byme\')">By me</button>'+
+      '<button class="btn '+(window._appOverdue?'sm':'ghost sm')+'" onclick="filterApprovalsOverdue()">Overdue</button>'+
+      (mgr?'<span style="flex:1"></span><button class="btn ghost sm" onclick="openPeriodsModal()">🔒 Periods & SLA</button>':'')+
     '</div><div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">'+
       '<button class="btn ghost sm" onclick="selectVisiblePending()">Select visible (<span id="visCount">0</span>)</button>'+
       '<button class="btn ghost sm" onclick="selectAllPending()">Select all pending (<span id="allCount">0</span>)</button>'+
@@ -3144,6 +3158,7 @@ function renderApprovals(el){
 function renderApprovalsTable(){
   var body=document.getElementById('approvalsBody');if(!body)return;
   var items=approvalInboxFilter(collectPendingItems(window._appFilter||'all'), window._appInbox||'all');
+  if(window._appOverdue){var slaDays=window.SF&&SF.sla?SF.sla.get():3;items=items.filter(function(it){var a=daysSince(itemCreatedAt(it));return a!=null&&a>slaDays;});}
   window._appVisible=items;
   var sel=window._appSel||{};
   body.innerHTML=items.length?items.map(function(it){
@@ -3152,7 +3167,7 @@ function renderApprovalsTable(){
     var creator=itemCreator(it);
     var age=daysSince(itemCreatedAt(it));
     var ageBadge=(age!=null?'<div class="'+(age>3?'badc':'mutc')+'" style="font-size:9.5px">'+age+' d'+(age>3?' · overdue':'')+'</div>':'');
-    return '<tr class="'+(on?'app-sel':'')+'" data-key="'+esc(key)+'"><td><input type="checkbox" class="app-chk" data-key="'+esc(key)+'" '+(on?'checked':'')+' onchange="onAppCheck(this)"></td><td><span class="tag info">'+esc(it.type)+'</span></td><td>'+esc(it.label)+'</td><td class="mutc">'+esc(it.project)+'</td><td class="tright mono">'+money(it.amount)+'</td><td>'+esc(creator)+ageBadge+'</td><td><span class="tag warn">Pending</span></td><td class="tright" style="white-space:nowrap"><button class="btn ghost sm" title="Approval history" onclick="viewApprovalTimeline(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">🕓</button> <button class="btn ok sm" onclick="approveItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✕</button></td></tr>';
+    return '<tr class="'+(on?'app-sel':'')+'" data-key="'+esc(key)+'"><td><input type="checkbox" class="app-chk" data-key="'+esc(key)+'" '+(on?'checked':'')+' onchange="onAppCheck(this)"></td><td><span class="tag info">'+esc(it.type)+'</span></td><td>'+esc(it.label)+'</td><td class="mutc">'+esc(it.project)+'</td><td class="tright mono">'+money(it.amount)+'</td><td>'+esc(creator)+ageBadge+'</td><td><span class="tag warn">Pending</span></td><td class="tright" style="white-space:nowrap"><button class="btn ghost sm" title="Evidence attachments" onclick="openAttachmentsModal(\''+esc(it.table)+'\',\''+esc(it.id)+'\',\''+money(it.amount)+'\')">📎</button> <button class="btn ghost sm" title="Approval history" onclick="viewApprovalTimeline(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">🕓</button> <button class="btn ok sm" onclick="approveItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✕</button></td></tr>';
   }).join(''):'<tr><td colspan="8" class="empty">No pending items in this view</td></tr>';
   var vc=document.getElementById('visCount');if(vc)vc.textContent=String(items.length);
   var ac=document.getElementById('allCount');if(ac)ac.textContent=String(collectPendingItems('all').length);
@@ -3188,6 +3203,7 @@ function syncApprovalChrome(){
 }
 window.filterApprovals=function(f){window._appFilter=f;renderApprovalsTable();};
 window.filterApprovalsInbox=function(f){window._appInbox=f;renderApprovals();};
+window.filterApprovalsOverdue=function(){window._appOverdue=!window._appOverdue;renderApprovals();};
 window.onAppCheck=function(el){
   window._appSel=window._appSel||{};
   if(el.checked)window._appSel[el.getAttribute('data-key')]=true;
@@ -3274,6 +3290,39 @@ function approvalInboxFilter(items,mode){
   if(mode==='byme')return items.filter(function(it){return itemCreator(it)===me;});
   return items;
 }
+window.openAttachmentsModal=async function(table,id,amountLabel){
+  var req=attachmentRequiredFor(table,0)||false;
+  var render=function(){listAttachments(table,id).then(function(rows){
+    var body=document.getElementById('attList');
+    if(body)body.innerHTML=rows.length?rows.map(function(a){
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)"><div style="flex:1;font-size:12.5px"><b>'+esc(a.file_name||'attachment')+'</b><div class="mutc" style="font-size:10px">'+esc(a.uploaded_by||'')+' · '+fmtTime(a.created_at)+'</div></div><a class="btn ghost sm" href="'+esc(awaitSafeUrl(a))+'">Open</a> <button class="btn bad sm" onclick="removeAttachmentAndRefresh(\''+esc(a.id)+'\',\''+esc(table)+'\',\''+esc(id)+'\')">✕</button></div>';
+    }).join(''):'<div class="empty">No evidence attached</div>';
+  });};
+  async function awaitSafeUrl(a){try{var r=await supabase.storage.from('siteforge-files').createSignedUrl(a.file_path,3600);return (r&&r.data&&r.data.signedUrl)||'';}catch(e){return '';}}
+  var up='<div class="dropzone" onclick="document.getElementById(\'attFile\').click()"><input type="file" id="attFile" style="display:none" onchange="handleAttUpload(this, \''+esc(table)+'\',\''+esc(id)+'\')"><div style="font-size:22px">📎</div><div>Add evidence (invoice, delivery note, photo…)</div></div>';
+  openModal('📎 Evidence attachments'+(amountLabel?' — '+amountLabel:''), '<div class="mutc" style="font-size:11.5px;margin-bottom:10px">'+up+'</div><div id="attList">Loading…</div>', '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>');
+  render();
+};
+window.handleAttUpload=async function(input,table,id){
+  var f=input.files&&input.files[0];if(!f)return;
+  try{await uploadAttachment(table,id,f);toast('Evidence attached ✓','ok');window.openAttachmentsModal(table,id);}catch(e){toast('Upload failed: '+((e&&e.message)||e),'bad');}
+};
+window.removeAttachmentAndRefresh=async function(attId,table,id){
+  try{await removeAttachment(attId);toast('Attachment removed','ok');window.openAttachmentsModal(table,id);}catch(e){toast('Failed: '+((e&&e.message)||e),'bad');}
+};
+window.openPeriodsModal=async function(){
+  var slaDays=window.SF&&SF.sla?SF.sla.get():3;
+  var rows=closedPeriodsOf();
+  var h='<div class="card" style="margin-bottom:14px"><div style="font-weight:800;margin-bottom:6px">Approval SLA (days before overdue escalation)</div><div class="row"><input type="number" id="slaDays" min="1" value="'+slaDays+'" style="width:100px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px"> <button class="btn sm" onclick="saveSlaDays()">Save</button></div></div>';
+  h+='<div class="card"><div style="font-weight:800;margin-bottom:10px">Closed periods</div>';
+  h+=rows.length?('<table><thead><tr><th>Period</th><th>Closed by</th><th>Reason</th><th></th></tr></thead><tbody>'+rows.map(function(p){return '<tr><td class="mono">'+esc(p.period)+'</td><td>'+esc(p.closed_by||'')+'</td><td>'+esc(p.reason||'')+'</td><td class="tright"><button class="btn bad sm" onclick="reopenPeriod(\''+esc(p.period)+'\')">Reopen</button></td></tr>';}).join('')+'</tbody></table>'):'<div class="empty">No closed periods</div>';
+  h+='<div class="row" style="margin-top:12px"><input type="month" id="closePeriod" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px"><input id="closeReason" placeholder="Reason (optional)" style="flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px"><button class="btn" onclick="closePeriod()">Close month</button></div></div>';
+  openModal('🔒 Periods & SLA', h, '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>',{wide:true});
+};
+window.saveSlaDays=function(){var v=Number(document.getElementById('slaDays').value)||3;window.SF.sla.set(v).then(function(){toast('SLA updated ✓','ok');closeModal();}).catch(function(e){toast('Failed: '+((e&&e.message)||e),'bad');});};
+window.closePeriod=function(){var p=document.getElementById('closePeriod').value;if(!p)return toast('Pick a month','bad');var reason=document.getElementById('closeReason').value.trim()||null;window.SF.periods.close(p,reason).then(function(){toast('Month '+p+' closed ✓','ok');openPeriodsModal();}).catch(function(e){toast('Failed: '+((e&&e.message)||e),'bad');});};
+window.reopenPeriod=function(p){window.SF.periods.reopen(p).then(function(){toast('Month '+p+' reopened','ok');openPeriodsModal();}).catch(function(e){toast('Failed: '+((e&&e.message)||e),'bad');});};
+
 window.viewApprovalTimeline=async function(table,id){
   var events=await fetchApprovalEvents(table,id);
   openModal('🕓 Approval timeline',
@@ -3282,6 +3331,60 @@ window.viewApprovalTimeline=async function(table,id){
     }).join(''))+'</div>':'<div class="empty">No approval events recorded yet (run migration 202611050001).</div>'),
     '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>');
 };
+
+/* ---- Phase 2: period close, evidence attachments, goods-received matching ---- */
+function closedPeriodsOf(){return state.closedPeriods||[];}
+function isPeriodClosed(period){return closedPeriodsOf().some(function(p){return p.period===period;});}
+function dateKeyForTable(table){
+  return {timesheets:'work_date',company_expenses:'expense_date',payments:'paid_date',payroll_batches:'period',progress_billings:'period_from',materials:'invoice_date'}[table]||null;
+}
+function periodOfDate(v){
+  if(!v)return null;
+  if(typeof v==='string'&&/^\d{4}-\d{2}$/.test(v))return v;
+  var d=toLocalDate(v);if(!d)return null;
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+function assertPeriodOpen(table,row){
+  var key=dateKeyForTable(table);if(!key)return;
+  var p=periodOfDate(row&&row[key]!=null?row[key]:null);
+  if(p&&isPeriodClosed(p))throw new Error('Month '+p+' is closed — reopen it in Settings before editing.');
+}
+async function listAttachments(table,id){
+  if(!supabase)return [];
+  var r=await supabase.from('approval_attachments').select('*').eq('table_name',table).eq('record_id',id).order('created_at',{ascending:true});
+  return (r&&r.data)||[];
+}
+async function uploadAttachment(table,id,file){
+  if(!file)return null;
+  var clean=String(file.name||'file').replace(/[^a-zA-Z0-9._-]/g,'_');
+  var path='attachments/'+table+'/'+id+'/'+Date.now()+'_'+clean;
+  var up=await supabase.storage.from('siteforge-files').upload(path,file,{upsert:false,contentType:file.type||'application/octet-stream'});
+  if(up.error)throw up.error;
+  return await insertRow('approval_attachments',{table_name:table,record_id:id,file_path:path,file_name:file.name,file_size:file.size,mime_type:file.type||null,uploaded_by:userProfile?userProfile.name:null});
+}
+async function removeAttachment(attId){
+  var r=await supabase.from('approval_attachments').select('*').eq('id',attId).single();
+  if(r&&r.data&&r.data.file_path){try{await supabase.storage.from('siteforge-files').remove([r.data.file_path]);}catch(e){}}
+  await deleteRow('approval_attachments',attId);
+}
+function attachmentRequiredFor(table,amount){
+  var rule=(state.attachmentRules||[]).find(function(x){return x.table_name===table;});
+  if(!rule)return false;
+  return Number(rule.min_amount_aed)>0 && Number(amount)>=Number(rule.min_amount_aed);
+}
+function grnReceivedQty(materialId){
+  return (state.grn||[]).filter(function(g){return g.material_id===materialId;}).reduce(function(s,g){return s+(Number(g.qty_received)||0);},0);
+}
+function grnMatched(material){
+  return grnReceivedQty(material.id)>=(Number(material.qty)||0)-0.0001;
+}
+function grnMatchedForPayment(p){
+  if(!p)return true;
+  if(p.type!=='invoice'&&p.type!=='pending')return true;
+  var m=(state.materials||[]).find(function(x){return x.invoiceNo===p.invoiceNo;});
+  if(!m)return true; // no linked PO to verify against
+  return grnMatched(m);
+}
 
 async function updatePendingStatus(table,id,payload,expectedStatus){
   var expected=expectedStatus||'pending';
@@ -3389,6 +3492,10 @@ window.approveItem=async function(table,id){
   if(!guardManager())return;
   var it=collectPendingItems('all').filter(function(x){return x.table===table&&x.id===id;})[0]||{table:table,id:id,label:id,amount:0,cat:'Item',type:'Item'};
   try{
+    if(attachmentRequiredFor(table,it.amount)){
+      var atts=await listAttachments(table,id);
+      if(!atts.length){openAttachmentsModal(table,id,money(it.amount));return toast('Evidence is required for this amount — attach a document first','bad');}
+    }
     await writeApproval(it,'approved',null);
     await refreshApprovalTables([it]);
     if(window.SF&&SF.approvalsRefresh)SF.approvalsRefresh.forEach(function(fn){try{fn();}catch(e){}});
@@ -3810,6 +3917,10 @@ window.SF.db.rpc=function(name,args){return supabase.rpc(name,args||{});};
 window.SF.suppliers={list:function(){return state.suppliers||[];},byId:function(id){return (state.suppliers||[]).find(function(x){return x.id===id;});},lookup:function(name){var n=String(name||'').trim().toLowerCase();if(!n)return[];return (state.suppliers||[]).filter(function(x){return String(x.name||'').toLowerCase().indexOf(n)===0||String(x.name||'').toLowerCase().indexOf(n)>=0;});}};
 window.SF.approvals={limits:function(){return state.approvalLimits||[];},eventsFor:fetchApprovalEvents,inbox:approvalInboxFilter,decide:approveViaRpc,creatorOf:itemCreator};
 window.SF.ui.openApprovalsInbox=function(){window._appInbox='forme';window._appFilter='all';goView('approvals');};
+window.SF.periods={list:closedPeriodsOf,isClosed:isPeriodClosed,close:async function(period,reason){await insertRow('closed_periods',{company_id:state.company?state.company.id:null,period:period,closed_by:userProfile?userProfile.name:null,reason:reason||null});await loadCompanyData();},reopen:async function(period){var rows=closedPeriodsOf().filter(function(p){return p.period===period;});for(var i=0;i<rows.length;i++){await deleteRow('closed_periods',rows[i].id);}await loadCompanyData();}};
+window.SF.grn={list:function(){return state.grn||[];},receivedQty:grnReceivedQty,matched:grnMatched,add:async function(g){return await insertRow('goods_received_notes',Object.assign({project_id:state.currentProjectId},g));}};
+window.SF.attachments={list:listAttachments,upload:uploadAttachment,remove:removeAttachment,requiredFor:attachmentRequiredFor};
+window.SF.sla={get:function(){return (state.approvalSla&&state.approvalSla.sla_days!=null)?state.approvalSla.sla_days:3;},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
 
 console.log('[SiteForge v29.4] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
