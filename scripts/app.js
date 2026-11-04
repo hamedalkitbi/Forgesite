@@ -2855,6 +2855,7 @@ window.viewSiteReport=function(id){
     '<div class="mutc mono" style="font-size:11px;margin-bottom:8px">'+fmtDate(r.report_date)+' · '+esc(r.weather||'')+' · '+esc(r.workforce_count||0)+' workers</div>'+block('Activities',r.activities)+block('Issues',r.issues)+block('Safety',r.safety_notes)+
     (photos.length?'<div style="margin-top:14px"><div style="font-size:10.5px;text-transform:uppercase;color:var(--muted);font-weight:800;margin-bottom:6px">Photos ('+photos.length+')</div><div class="photo-grid" id="srViewPhotoGrid"></div></div>':''),
     '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>',{wide:true});
+  if(photos.length)setTimeout(function(){fillPhotoThumbs(document.getElementById('srViewPhotoGrid'),photos,'previewReportPhoto');},40);
 };
 window.previewReportPhoto=async function(idx){
   var p=window._viewingPhotos&&window._viewingPhotos[idx];if(!p)return;
