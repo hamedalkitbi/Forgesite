@@ -3,6 +3,23 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [29.6.0] - 2026-11-04
+
+### Added
+- **Retention release**: per-project retention schedule (retained − released = open), director
+  records releases with reason; the financial balance sheet now subtracts released retention
+- **Subcontractor measurement certificates**: measure BOQ quantities × rate → certified amount,
+  certify, and generate a linked subcontractor payment request (flows into approvals)
+- **Management exceptions dashboard**: overdue approvals, unlinked costs, duplicate supplier
+  invoices, committed-but-undelivered POs, open retention
+- Migration `202611050003_phase3.sql` (retention_releases, subcontractor_certificates, RPC + RLS)
+
+### Fixed
+- Site-report photos now populate thumbnails when viewing a report (the grid render was missing)
+
+### Changed
+- Version 29.6.0; service-worker cache `v29.6.0-1`
+
 ## [29.5.0] - 2026-11-04
 
 ### Added

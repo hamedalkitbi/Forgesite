@@ -84,6 +84,7 @@ Run the SQL files in `supabase/migrations/` **in filename order** in the Supabas
 | `202611041001_worker_links_and_payroll.sql` | `timesheets.worker_id` link + payroll/receivables indexes |
 | `202611050001_phase1_accountability.sql` | suppliers master, approval limits + events, server-side RPC approvals, RLS |
 | `202611050002_phase2_workflow.sql` | evidence attachments, closed periods, SLA + escalation, goods received notes |
+| `202611050003_phase3.sql` | retention releases, subcontractor certificates, management metrics |
 
 Until a migration is applied, its module shows a "needs a database update" card naming the file
 — nothing else in the app breaks.

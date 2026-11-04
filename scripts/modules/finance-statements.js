@@ -494,6 +494,7 @@
       budgetLines: arr(firstDefined(data.budgetLines, data.company_budget_lines, data.companyBudgetLines)).map(mapBudgetLine),
       parties: arr(firstDefined(data.parties, data.project_parties, data.projectParties)).map(mapParty),
       paymentRequests: arr(firstDefined(data.paymentRequests, data.payment_requests)).map(mapPaymentRequest),
+      retentionReleases: arr(firstDefined(data.retentionReleases, data.retention_releases)).map(function (r) { r = r || {}; return { id: r.id || null, projectId: firstDefined(r.project_id, r.projectId) || null, amount: num(firstDefined(r.amount_aed, r.amount)) }; }),
       projects: arr(data.projects).map(mapProject),
       companies: arr(data.companies).map(mapCompany),
       settings: mapSettings(firstDefined(data.settings, data.finance_settings, data.financeSettings))
@@ -832,7 +833,7 @@
     var ap = apTotals(d);
     var cf = cashFlowOf(d);
     var certified = certifiedBillings(d);
-    var releasedRetention = Number(opts.releasedRetention || ((typeof window !== 'undefined' && window.SF && window.SF.retention && window.SF.retention._releasedTotal) || 0)) || 0;
+    var releasedRetention = Number(opts.releasedRetention != null ? opts.releasedRetention : sum(d.retentionReleases, function (r) { return r.amount; })) || 0;
     var retentionPayable = round2(Math.max(0, sum(certified, function (b) { return b.retentionAmount; }) - releasedRetention));
     var vatPayable = round2(sum(certified, function (b) { return b.vatAmount; }));
     var openingCash = round2(settings.openingCash);
@@ -1248,7 +1249,7 @@
      DATA LOADING — no project filter; selectStrict distinguishes missing tables
      ========================================================================== */
   var CORE_TABLES = ['payments', 'progress_billings', 'materials', 'timesheets', 'company_expenses', 'company_budget_lines', 'project_parties', 'projects', 'companies'];
-  var OPTIONAL_TABLES = ['payment_requests', 'finance_settings'];
+  var OPTIONAL_TABLES = ['payment_requests', 'finance_settings', 'retention_releases'];
 
   function isMissingTable(err) {
     var msg = String((err && err.message) || err || '').toLowerCase();
@@ -1309,6 +1310,7 @@
         budgetLines: arr(byTable.company_budget_lines.rows),
         parties: arr(byTable.project_parties.rows),
         paymentRequests: byTable.payment_requests && !byTable.payment_requests.error ? arr(byTable.payment_requests.rows) : [],
+        retentionReleases: byTable.retention_releases && !byTable.retention_releases.error ? arr(byTable.retention_releases.rows) : [],
         projects: arr(byTable.projects.rows),
         companies: companies
       };

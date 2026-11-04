@@ -266,7 +266,7 @@ function applyI18nStatic(){
   if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
   var userEl=document.getElementById('loginUser');
   if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
-  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.5';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.6';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -3888,7 +3888,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
-  version:'v29.5',
+  version:'v29.6',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3939,5 +3939,5 @@ window.SF.retention={
 };
 window.SF.sla={get:function(){return state.approvalSla||{sla_days:3};},days:function(){var o=state.approvalSla||{};return Number(o.sla_days!=null?o.sla_days:3);},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
 
-console.log('[SiteForge v29.5] ready · modules:',Object.keys(SFviews).join(', ')||'none');
+console.log('[SiteForge v29.6] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();

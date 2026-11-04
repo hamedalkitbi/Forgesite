@@ -415,6 +415,19 @@ export const MOCK_SOURCE = String.raw`(function () {
 
   SEED.goods_received_notes = [];
 
+  /* Phase 3 — retention releases + subcontractor certificates.
+     Mirrors supabase/migrations/202611050003_phase3.sql. */
+  SEED.retention_releases = [
+    { id: sid('k', 1), project_id: projectA, amount_aed: 150000, release_date: offsetDate(-15), released_by: 'Hamed Al Kitbi', reason: 'Retention release — structural steel complete', created_at: offsetTs(-15) },
+    { id: sid('k', 2), project_id: projectA, amount_aed: 75000, release_date: offsetDate(-5), released_by: 'Fatima Al Mansoori', reason: 'Partial retention release against PB-001', created_at: offsetTs(-5) }
+  ];
+
+  SEED.subcontractor_certificates = [
+    { id: sid('l', 1), project_id: projectA, supplier_id: sid('g', 4), boq_item_id: boq.electrical, reference: 'SC-0001', period: '2026-10', measured_qty: 0.4, rate_aed: 1250000, certified_amount_aed: 500000, status: 'certified', certified_by: 'Hamed Al Kitbi', certified_at: offsetTs(-8), payment_request_id: null, notes: 'Electrical first fix — 40% measured', created_at: offsetTs(-10) },
+    { id: sid('l', 2), project_id: projectA, supplier_id: sid('g', 4), boq_item_id: boq.electrical, reference: 'SC-0002', period: '2026-10', measured_qty: 0.25, rate_aed: 1250000, certified_amount_aed: 312500, status: 'certified', certified_by: 'Fatima Al Mansoori', certified_at: offsetTs(-4), payment_request_id: null, notes: 'Electrical first fix — 65% cumulative', created_at: offsetTs(-6) },
+    { id: sid('l', 3), project_id: projectA, supplier_id: sid('g', 4), boq_item_id: boq.electrical, reference: 'SC-0003', period: '2026-10', measured_qty: 0.1, rate_aed: 1250000, certified_amount_aed: 125000, status: 'draft', certified_by: null, certified_at: null, payment_request_id: null, notes: null, created_at: offsetTs(-1) }
+  ];
+
   var DB = {};
   Object.keys(SEED).forEach(function (table) { DB[table] = clone(SEED[table]); });
   var INITIAL_COPY = clone(DB);
@@ -1111,12 +1124,36 @@ export const MOCK_SOURCE = String.raw`(function () {
     });
     return { data: { escalated: created.length }, error: null };
   }
+  /* Phase 3 RPC — sf_retention_open(p_project) → {total_retained, released, open}.
+     total_retained = sum of progress_billings.retention_amount for certified/paid,
+     released = sum of retention_releases.amount_aed, open = total_retained − released. */
+  function retentionOpen(args) {
+    var project = args && args.p_project;
+    var retained = 0;
+    var billings = DB.progress_billings || [];
+    for (var i = 0; i < billings.length; i += 1) {
+      var b = billings[i];
+      if (norm(b.project_id) !== norm(project)) continue;
+      if (b.status === 'certified' || b.status === 'paid') retained += Number(b.retention_amount || 0);
+    }
+    var released = 0;
+    var releases = DB.retention_releases || [];
+    for (var j = 0; j < releases.length; j += 1) {
+      var r = releases[j];
+      if (norm(r.project_id) === norm(project)) released += Number(r.amount_aed || 0);
+    }
+    var totalRetained = Math.round(retained * 100) / 100;
+    var totalReleased = Math.round(released * 100) / 100;
+    var open = Math.round((totalRetained - totalReleased) * 100) / 100;
+    return { data: { total_retained: totalRetained, released: totalReleased, open: open }, error: null };
+  }
   function rpcDispatch(fn, args) {
     if (fn === 'sf_approve_record') return { data: approveDecide('approve', args || {}), error: null };
     if (fn === 'sf_reject_record') return { data: approveDecide('reject', args || {}), error: null };
     if (fn === 'sf_assert_period_open') return assertPeriodOpen(args || {});
     if (fn === 'sf_material_grn') return materialGrn(args || {});
     if (fn === 'sf_escalate_overdue') return escalateOverdue();
+    if (fn === 'sf_retention_open') return retentionOpen(args || {});
     return { data: { fn: fn, args: args || null, mock: true }, error: null };
   }
 
