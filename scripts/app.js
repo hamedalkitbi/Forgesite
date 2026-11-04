@@ -32,7 +32,7 @@ var supabase=null, currentUser=null, userProfile=null;
 var state={company:null,projects:[],currentProjectId:null,currentProject:null,
   expenses:[],companyBudget:[],budget:[],timesheets:[],materials:[],payroll:[],audit:[],
   boq:[],schedule:[],payments:[],parties:[],changeOrders:[],billings:[],attachments:[],notifications:[],drawings:[],
-  siteReports:[],workers:[],complianceDocs:[]};
+  siteReports:[],workers:[],complianceDocs:[],suppliers:[],approvalLimits:[]};
 var currentView='company-dash';
 
 var ROLES={
@@ -313,26 +313,30 @@ async function loadCompanyData(){
     fetchAllRows('company_expenses',null,'expense_date',false),
     fetchAllRows('company_budget_lines',null,'category',true),
     fetchAllRows('workers',null,'staff_no',true),
-    fetchAllRows('compliance_documents',null,'expiry_date',true)
+    fetchAllRows('compliance_documents',null,'expiry_date',true),
+    fetchAllRows('suppliers',null,'name',true),
+    fetchAllRows('approval_limits',null,null,false)
   ]);
   state.projects=r[0];
   state.expenses=r[1];
   state.companyBudget=r[2];
   state.workers=r[3];
   state.complianceDocs=r[4];
+  state.suppliers=r[5]||[];
+  state.approvalLimits=r[6]||[];
 }
 
 function mapProjectTable(table,rows){
   if(table==='budget_lines')state.budget=rows.map(function(x){return {id:x.id,code:x.code,desc:x.description,cat:x.category,trade:x.trade,budget:Number(x.budget_aed)||0,actual:Number(x.actual_aed)||0,evPct:Number(x.ev_pct)||0,pvPct:Number(x.pv_pct)||0};});
-  else if(table==='timesheets')state.timesheets=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,name:x.employee_name,trade:x.trade,date:x.work_date,hours:Number(x.total_hours)||0,regHours:Number(x.reg_hours)||0,otHours:Number(x.ot_hours)||0,rate:Number(x.rate_aed)||0,cost:Number(x.total_cost_aed)||0,status:x.status,approvedBy:x.approved_by};});
-  else if(table==='materials')state.materials=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,po:x.po_number,invoiceNo:x.invoice_no,supplier:x.supplier,trade:x.trade,desc:x.description,qty:Number(x.quantity)||0,unit:x.unit,unitCost:Number(x.unit_cost_aed)||0,stage:x.stage,date:x.invoice_date,source:x.source,status:x.status||'approved',approvedBy:x.approved_by||null,approvedAt:x.approved_at||null,rejectionReason:x.rejection_reason||null};});
+  else if(table==='timesheets')state.timesheets=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,name:x.employee_name,trade:x.trade,date:x.work_date,hours:Number(x.total_hours)||0,regHours:Number(x.reg_hours)||0,otHours:Number(x.ot_hours)||0,rate:Number(x.rate_aed)||0,cost:Number(x.total_cost_aed)||0,status:x.status,createdBy:x.created_by||null,approvedBy:x.approved_by};});
+  else if(table==='materials')state.materials=rows.map(function(x){return {id:x.id,boq_item_id:x.boq_item_id||null,po:x.po_number,invoiceNo:x.invoice_no,supplier:x.supplier,trade:x.trade,desc:x.description,qty:Number(x.quantity)||0,unit:x.unit,unitCost:Number(x.unit_cost_aed)||0,stage:x.stage,date:x.invoice_date,source:x.source,status:x.status||'approved',createdBy:x.created_by||null,approvedBy:x.approved_by||null,approvedAt:x.approved_at||null,rejectionReason:x.rejection_reason||null};});
   else if(table==='payroll_batches')state.payroll=rows.map(function(x){return {id:x.id,ts:new Date(x.certified_at).getTime(),period:x.period,count:x.worker_count,gross:Number(x.gross_aed)||0,net:Number(x.net_aed)||0};});
   else if(table==='audit_log')state.audit=rows.map(function(x){return {id:x.id,ts:new Date(x.ts).getTime(),user:x.user_name,role:x.user_role,action:x.action,detail:x.detail};});
-  else if(table==='boq_items')state.boq=rows.map(function(x){return {id:x.id,section:x.section,code:x.code,desc:String(x.description||''),unit:x.unit,qty:Number(x.quantity)||0,rate:Number(x.rate)||0,status:x.status||'approved'};});
+  else if(table==='boq_items')state.boq=rows.map(function(x){return {id:x.id,section:x.section,code:x.code,desc:String(x.description||''),unit:x.unit,qty:Number(x.quantity)||0,rate:Number(x.rate)||0,status:x.status||'approved',createdBy:x.created_by||null};});
   else if(table==='schedule_items')state.schedule=rows.map(function(x){return {id:x.id,name:x.name,startDate:x.start_date,endDate:x.end_date,progress:numOr(x.progress,0),status:x.status,assignedTo:x.assigned_to};});
   else if(table==='payments')state.payments=rows.map(function(x){return {id:x.id,type:x.payment_type,invoiceNo:x.invoice_no,desc:x.description,amount:Number(x.amount)||0,dueDate:x.due_date,paidDate:x.paid_date,status:x.status,method:x.payment_method};});
   else if(table==='project_parties')state.parties=rows.map(function(x){return {id:x.id,type:x.party_type,name:x.name,contactPerson:x.contact_person,phone:x.phone,email:x.email,address:x.address,companyName:x.company_name,notes:x.notes};});
-  else if(table==='change_orders')state.changeOrders=rows.map(function(x){return {id:x.id,coNumber:x.co_number,desc:x.description,amount:Number(x.amount)||0,status:x.status||'pending'};});
+  else if(table==='change_orders')state.changeOrders=rows.map(function(x){return {id:x.id,coNumber:x.co_number,desc:x.description,amount:Number(x.amount)||0,status:x.status||'pending',createdBy:x.created_by||null};});
   else if(table==='progress_billings')state.billings=rows.map(function(x){return {id:x.id,billingNo:x.billing_no,periodFrom:x.period_from,periodTo:x.period_to,completionPct:x.completion_pct!=null?Number(x.completion_pct):null,retentionPct:numOr(x.retention_pct,10),advanceRecoveryPct:numOr(x.advance_recovery_pct,0),advanceRecoveryAmount:numOr(x.advance_recovery_amount,0),status:x.status,totalClaim:Number(x.total_claim)||0,retentionAmount:Number(x.retention_amount)||0,netPayable:Number(x.net_payable)||0,previousBilled:Number(x.previous_billed)||0,currentNetExclVat:numOr(x.current_net_excl_vat,Math.max(0,(Number(x.net_payable)||0)-(Number(x.previous_billed)||0))),vatPct:numOr(x.vat_pct,5),vatAmount:Number(x.vat_amount)||0,totalPayableIncVat:Number(x.total_payable_inc_vat)||0,createdAt:x.created_at};});
   else if(table==='attachments')state.attachments=rows;
   else if(table==='drawings')state.drawings=rows.map(function(x){return {id:x.id,title:x.title,revision:x.revision,category:x.category,description:x.description,file_path:x.file_path,file_name:x.file_name,file_size:x.file_size,mime_type:x.mime_type,status:x.status,uploaded_by:x.uploaded_by,created_at:x.created_at};});
@@ -1198,7 +1202,7 @@ window.newBOQ=function(){
     fields:[{key:'section',label:'Section'},{key:'code',label:t('code')},{key:'description',label:t('description'),required:true,full:true,type:'textarea',rows:2},{key:'unit',label:t('unit')},{key:'quantity',label:t('qty'),type:'number',step:'0.001',required:true},{key:'rate',label:t('rate')+' (AED)',type:'number',step:'0.01',required:true}],
     onSubmit:async function(d){
       var status=isManagerRole()?'approved':'pending';
-      await insertRow('boq_items',{project_id:state.currentProjectId,section:d.section||'Uncategorized',code:d.code||null,description:d.description,unit:d.unit||null,quantity:Number(d.quantity)||0,rate:Number(d.rate)||0,sort_order:state.boq.length,status:status});
+      await insertRow('boq_items',{project_id:state.currentProjectId,section:d.section||'Uncategorized',code:d.code||null,description:d.description,unit:d.unit||null,quantity:Number(d.quantity)||0,rate:Number(d.rate)||0,sort_order:state.boq.length,status:status,created_by:userProfile?userProfile.name:null});
       await reloadProjectTable('boq_items','sort_order',true);render();toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
     }
   });
@@ -1745,6 +1749,7 @@ window.newMaterial=function(){
         stage:d.stage,
         invoice_date:today(),
         source:'manual',
+        created_by:userProfile?userProfile.name:null,
         status:status
       });
       await reloadProjectTable('materials','created_at',false);render();toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
@@ -1899,7 +1904,7 @@ window.newCO=function(){
     fields:[{key:'co_number',label:'CO #',required:true,default:'CO-'+String(state.changeOrders.length+1).padStart(3,'0')},{key:'description',label:t('description'),required:true,full:true,type:'textarea',rows:2},{key:'amount',label:t('amount')+' (AED)',type:'number',step:'0.01',required:true},{key:'status',label:t('status'),type:'select',options:['pending','approved','rejected'],default:'pending'}],
     onSubmit:async function(d){
       var status=isManagerRole()?d.status:'pending';
-      await insertRow('change_orders',{project_id:state.currentProjectId,co_number:d.co_number,description:d.description,amount:Number(d.amount),status:status});
+      await insertRow('change_orders',{project_id:state.currentProjectId,co_number:d.co_number,description:d.description,amount:Number(d.amount),status:status,created_by:userProfile?userProfile.name:null});
       await reloadProjectTable('change_orders','created_at',false);render();toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
     }
   });
@@ -1947,6 +1952,7 @@ window.newTimesheet=function(){
         worker_id:wrk?wrk.id:null,
         employee_name:d.employee_name,
         trade:d.trade||(wrk&&wrk.trade)||null,
+        created_by:userProfile?userProfile.name:null,
         work_date:d.work_date,
         reg_hours:Number(d.reg_hours),
         ot_hours:Number(d.ot_hours),
@@ -2071,7 +2077,7 @@ window.commitUnifiedPayrollRun=async function(){
       }
     }
     await insertRow('payroll_batches',{project_id:state.currentProjectId,period:run.period,worker_count:run.lines.length,gross_aed:run.totalGross,net_aed:run.totalNet,certified_at:new Date().toISOString()});
-    await insertRow('company_expenses',{category:'Salaries',description:'Certified monthly payroll run ('+run.period+' · '+run.lines.length+' workers)',amount:run.totalNet,expense_date:today(),paid_to:'WPS Payroll Batch',payment_method:'Bank Transfer',status:'approved'});
+    await insertRow('company_expenses',{category:'Salaries',description:'Certified monthly payroll run ('+run.period+' · '+run.lines.length+' workers)',amount:run.totalNet,expense_date:today(),paid_to:'WPS Payroll Batch',payment_method:'Bank Transfer',status:'approved',created_by:userProfile?userProfile.name:null});
     await loadCompanyData();
     await reloadProjectTable('payroll_batches','certified_at',false);
     closeModal();render();
@@ -2161,6 +2167,14 @@ async function ensureSupplier(name,projectId){
   if(!n)return {party:null,created:false,reason:'empty'};
   var hit=await findSupplierByName(n);
   if(hit)return {party:hit,created:false};
+  // Global supplier/contractor master (Phase 1) takes precedence over per-project parties.
+  var g=(state.suppliers||[]).find(function(x){return supplierKey(x.name)===supplierKey(n);});
+  if(g){
+    if(projectId){
+      try{await supabase.from('project_suppliers').upsert({project_id:projectId,supplier_id:g.id},{onConflict:'project_id,supplier_id'});}catch(e){console.warn('project_suppliers link failed',e);}
+    }
+    return {party:{id:g.id,name:g.name,company_name:g.name,party_type:g.kind==='subcontractor'?'subcontractor':'supplier'},created:false,global:true};
+  }
   if(!projectId)return {party:null,created:false,reason:'no-project'};
   var ins=await insertRow('project_parties',{project_id:projectId,party_type:'supplier',name:n,company_name:n,notes:'Auto-registered from scanned bill'});
   if(state.currentProjectId===projectId){try{await reloadProjectTable('project_parties',null,true);}catch(e){}}
@@ -3055,11 +3069,11 @@ function collectPendingItems(filter){
   if(all||filter==='mat') (state.materials||[]).forEach(function(m){if((m.status||'approved')==='pending')items.push({type:'PO',cat:'POs',id:m.id,table:'materials',label:(m.po||'')+' · '+(m.desc||'').slice(0,40),amount:(Number(m.qty)||0)*(Number(m.unitCost)||0),project:state.currentProject?state.currentProject.code:'—',submitter:m.supplier||'—'});});
   if(!state.currentProjectId&&state.globalPending){
     var gp=state.globalPending;
-    (gp.boq||[]).forEach(function(x){items.push({type:'BOQ',cat:'BOQ',id:x.id,table:'boq_items',label:((x.code||'')+' '+(x.description||'')).trim().slice(0,80),amount:(Number(x.quantity)||0)*(Number(x.rate)||0),project:x._projCode||'—',submitter:'—'});});
-    (gp.ts||[]).forEach(function(x){items.push({type:'Labor',cat:'Labor',id:x.id,table:'timesheets',label:(x.employee_name||'')+' · '+(x.work_date||''),amount:Number(x.total_cost_aed)||0,project:x._projCode||'—',submitter:x.employee_name||'—'});});
-    (gp.mat||[]).forEach(function(x){items.push({type:'PO',cat:'POs',id:x.id,table:'materials',label:(x.po_number||'')+' · '+(x.description||'').slice(0,40),amount:(Number(x.quantity)||0)*(Number(x.unit_cost_aed)||0),project:x._projCode||'—',submitter:'—'});});
-    (gp.co||[]).forEach(function(x){items.push({type:'CO',cat:'Change Orders',id:x.id,table:'change_orders',label:(x.co_number||'')+' · '+(x.description||'').slice(0,40),amount:Number(x.amount)||0,project:x._projCode||'—',submitter:'—'});});
-    (gp.exp||[]).forEach(function(x){items.push({type:'Expense',cat:'Expenses',id:x.id,table:'company_expenses',label:x.description||x.category||'Expense',amount:Number(x.amount)||0,project:'Company',submitter:x.created_by||'—'});});
+    (gp.boq||[]).forEach(function(x){items.push({type:'BOQ',cat:'BOQ',id:x.id,table:'boq_items',label:((x.code||'')+' '+(x.description||'')).trim().slice(0,80),amount:(Number(x.quantity)||0)*(Number(x.rate)||0),project:x._projCode||'—',submitter:x.created_by||'—',creator:x.created_by||'—',createdAt:x.created_at||null});});
+    (gp.ts||[]).forEach(function(x){items.push({type:'Labor',cat:'Labor',id:x.id,table:'timesheets',label:(x.employee_name||'')+' · '+(x.work_date||''),amount:Number(x.total_cost_aed)||0,project:x._projCode||'—',submitter:x.created_by||x.employee_name||'—',creator:x.created_by||'—',createdAt:x.created_at||null});});
+    (gp.mat||[]).forEach(function(x){items.push({type:'PO',cat:'POs',id:x.id,table:'materials',label:(x.po_number||'')+' · '+(x.description||'').slice(0,40),amount:(Number(x.quantity)||0)*(Number(x.unit_cost_aed)||0),project:x._projCode||'—',submitter:x.created_by||'—',creator:x.created_by||'—',createdAt:x.created_at||null});});
+    (gp.co||[]).forEach(function(x){items.push({type:'CO',cat:'Change Orders',id:x.id,table:'change_orders',label:(x.co_number||'')+' · '+(x.description||'').slice(0,40),amount:Number(x.amount)||0,project:x._projCode||'—',submitter:x.created_by||'—',creator:x.created_by||'—',createdAt:x.created_at||null});});
+    (gp.exp||[]).forEach(function(x){items.push({type:'Expense',cat:'Expenses',id:x.id,table:'company_expenses',label:x.description||x.category||'Expense',amount:Number(x.amount)||0,project:'Company',submitter:x.created_by||'—',creator:x.created_by||'—',createdAt:x.created_at||null});});
   }
   (window.SF&&SF.approvalsSources||[]).forEach(function(fn){
     try{var extra=fn();if(Array.isArray(extra))items=items.concat(extra);}catch(e){console.warn('[SiteForge] approvals source failed',e);}
@@ -3090,6 +3104,7 @@ function guardManager(){
 function renderApprovals(el){
   if(!window._appSel)window._appSel={};
   if(!window._appFilter)window._appFilter='all';
+  if(!window._appInbox)window._appInbox='all';
   var pending=collectPendingItems('all');
   var exp=approvalExposure(pending);
   var mgr=isManagerRole();
@@ -3113,6 +3128,10 @@ function renderApprovals(el){
       '<button class="btn ghost sm" onclick="filterApprovals(\'mat\')">POs</button>'+
       '<button class="btn ghost sm" onclick="filterApprovals(\'co\')">COs</button>'+
     '</div><div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">'+
+      '<button class="btn '+(window._appInbox==='all'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'all\')">Inbox: All</button>'+
+      '<button class="btn '+(window._appInbox==='forme'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'forme\')">For me</button>'+
+      '<button class="btn '+(window._appInbox==='byme'?'sm':'ghost sm')+'" onclick="filterApprovalsInbox(\'byme\')">By me</button>'+
+    '</div><div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">'+
       '<button class="btn ghost sm" onclick="selectVisiblePending()">Select visible (<span id="visCount">0</span>)</button>'+
       '<button class="btn ghost sm" onclick="selectAllPending()">Select all pending (<span id="allCount">0</span>)</button>'+
       '<button class="btn ghost sm" onclick="clearApprovalSelection()">Clear selection</button>'+
@@ -3124,13 +3143,16 @@ function renderApprovals(el){
 }
 function renderApprovalsTable(){
   var body=document.getElementById('approvalsBody');if(!body)return;
-  var items=collectPendingItems(window._appFilter||'all');
+  var items=approvalInboxFilter(collectPendingItems(window._appFilter||'all'), window._appInbox||'all');
   window._appVisible=items;
   var sel=window._appSel||{};
   body.innerHTML=items.length?items.map(function(it){
     var key=approvalKey(it.table,it.id);
     var on=!!sel[key];
-    return '<tr class="'+(on?'app-sel':'')+'" data-key="'+esc(key)+'"><td><input type="checkbox" class="app-chk" data-key="'+esc(key)+'" '+(on?'checked':'')+' onchange="onAppCheck(this)"></td><td><span class="tag info">'+esc(it.type)+'</span></td><td>'+esc(it.label)+'</td><td class="mutc">'+esc(it.project)+'</td><td class="tright mono">'+money(it.amount)+'</td><td>'+esc(it.submitter)+'</td><td><span class="tag warn">Pending</span></td><td class="tright" style="white-space:nowrap"><button class="btn ok sm" onclick="approveItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✕</button></td></tr>';
+    var creator=itemCreator(it);
+    var age=daysSince(itemCreatedAt(it));
+    var ageBadge=(age!=null?'<div class="'+(age>3?'badc':'mutc')+'" style="font-size:9.5px">'+age+' d'+(age>3?' · overdue':'')+'</div>':'');
+    return '<tr class="'+(on?'app-sel':'')+'" data-key="'+esc(key)+'"><td><input type="checkbox" class="app-chk" data-key="'+esc(key)+'" '+(on?'checked':'')+' onchange="onAppCheck(this)"></td><td><span class="tag info">'+esc(it.type)+'</span></td><td>'+esc(it.label)+'</td><td class="mutc">'+esc(it.project)+'</td><td class="tright mono">'+money(it.amount)+'</td><td>'+esc(creator)+ageBadge+'</td><td><span class="tag warn">Pending</span></td><td class="tright" style="white-space:nowrap"><button class="btn ghost sm" title="Approval history" onclick="viewApprovalTimeline(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">🕓</button> <button class="btn ok sm" onclick="approveItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\''+esc(it.table)+'\',\''+esc(it.id)+'\')">✕</button></td></tr>';
   }).join(''):'<tr><td colspan="8" class="empty">No pending items in this view</td></tr>';
   var vc=document.getElementById('visCount');if(vc)vc.textContent=String(items.length);
   var ac=document.getElementById('allCount');if(ac)ac.textContent=String(collectPendingItems('all').length);
@@ -3165,6 +3187,7 @@ function syncApprovalChrome(){
   if(main)main.style.paddingBottom=picked.length?'120px':'60px';
 }
 window.filterApprovals=function(f){window._appFilter=f;renderApprovalsTable();};
+window.filterApprovalsInbox=function(f){window._appInbox=f;renderApprovals();};
 window.onAppCheck=function(el){
   window._appSel=window._appSel||{};
   if(el.checked)window._appSel[el.getAttribute('data-key')]=true;
@@ -3201,6 +3224,65 @@ async function refreshApprovalTables(items){
 /* Decide a pending row atomically: the status predicate prevents double-approval when a
    second manager (or a stale tab) acts on the same item. Unknown columns added by
    migrations that have not been run yet are dropped with a warning, as elsewhere. */
+/* Phase 1 accountability: prefer the server-side RPC (SoD + limits + event log); fall back to
+   the direct update only when the RPC does not exist (pre-migration). */
+async function approveViaRpc(status,table,id,reason){
+  if(!supabase||typeof supabase.rpc!=='function')return {ok:null};
+  var fn=status==='rejected'?'sf_reject_record':'sf_approve_record';
+  try{
+    var res=await supabase.rpc(fn,{p_table:table,p_id:id,p_reason:reason||null});
+    if(res&&!res.error){
+      var d=res.data;
+      if(d&&d.ok===false)return {ok:false,message:d.message||'Denied by policy'};
+      return {ok:true,message:(d&&d.message)||'ok'};
+    }
+    return {ok:null,error:res&&res.error}; // RPC missing/unavailable -> fall back
+  }catch(e){return {ok:null,error:e};}
+}
+async function fetchApprovalEvents(table,id){
+  if(!supabase)return [];
+  var r=await supabase.from('approval_events').select('*').eq('table_name',table).eq('record_id',id).order('created_at',{ascending:true});
+  return (r&&r.data)||[];
+}
+function itemCreator(it){
+  if(it.creator)return it.creator;
+  if(it.submitter&&it.submitter!=='—')return it.submitter;
+  var rows=(function(){switch(it.table){
+    case 'boq_items':return state.boq;case 'materials':return state.materials;
+    case 'change_orders':return state.changeOrders;case 'timesheets':return state.timesheets;
+    case 'company_expenses':return state.expenses;default:return null;
+  }})()||[];
+  var r=rows.find(function(x){return x.id===it.id;});
+  if(!r)return (it.submitter||'—');
+  return r.createdBy||r.created_by||r.requestedBy||r.requested_by||(it.submitter||'—');
+}
+function itemCreatedAt(it){
+  if(it.createdAt)return it.createdAt;
+  var rows=(function(){switch(it.table){
+    case 'boq_items':return state.boq;case 'materials':return state.materials;
+    case 'change_orders':return state.changeOrders;case 'timesheets':return state.timesheets;
+    case 'company_expenses':return state.expenses;default:return null;
+  }})()||[];
+  var r=rows.find(function(x){return x.id===it.id;});
+  if(!r)return null;
+  return r.created_at||r.date||r.expense_date||null;
+}
+function daysSince(v){var t=toLocalDate(v);if(!t)return null;var now=new Date();now.setHours(0,0,0,0);return Math.round((now-t)/86400000);}
+function approvalInboxFilter(items,mode){
+  var me=userProfile?userProfile.name:'';
+  if(mode==='forme')return items.filter(function(it){return itemCreator(it)!==me;});
+  if(mode==='byme')return items.filter(function(it){return itemCreator(it)===me;});
+  return items;
+}
+window.viewApprovalTimeline=async function(table,id){
+  var events=await fetchApprovalEvents(table,id);
+  openModal('🕓 Approval timeline',
+    (events.length?('<div style="max-height:60vh;overflow:auto">'+events.map(function(e){
+      return '<div style="padding:9px 0;border-bottom:1px solid var(--line)"><div><b>'+esc(e.action)+'</b> '+(e.from_status?'<span class="tag mut">'+esc(e.from_status)+' → '+esc(e.to_status)+'</span>':'')+' <span class="mutc" style="font-size:10px">'+esc(e.actor_name||'')+' · '+fmtTime(e.created_at)+'</span></div>'+(e.reason?'<div class="mutc" style="font-size:11px;margin-top:2px">'+esc(e.reason)+'</div>':'')+'</div>';
+    }).join(''))+'</div>':'<div class="empty">No approval events recorded yet (run migration 202611050001).</div>'),
+    '<button class="btn ghost" onclick="closeModal()">'+t('close')+'</button>');
+};
+
 async function updatePendingStatus(table,id,payload,expectedStatus){
   var expected=expectedStatus||'pending';
   var p=Object.assign({},payload);
@@ -3218,13 +3300,18 @@ async function updatePendingStatus(table,id,payload,expectedStatus){
   throw new Error('Approval update failed on "'+table+'": too many unknown columns.');
 }
 async function writeApproval(it,status,reason){
-  var updates={status:status};
-  if(status==='approved'||status==='rejected'){
-    updates.approved_by=userProfile?userProfile.name:null;
-    updates.approved_at=new Date().toISOString();
+  var rpc=await approveViaRpc(status,it.table,it.id,reason);
+  if(rpc&&rpc.ok===false)throw new Error(rpc.message||'Approval denied by policy');
+  if(!(rpc&&rpc.ok===true)){
+    // RPC not available yet: legacy direct update (still CAS-protected).
+    var updates={status:status};
+    if(status==='approved'||status==='rejected'){
+      updates.approved_by=userProfile?userProfile.name:null;
+      updates.approved_at=new Date().toISOString();
+    }
+    if(status==='rejected')updates[it.rejectionColumn||'rejection_reason']=reason||null;
+    await updatePendingStatus(it.table,it.id,updates,it.pendingStatus||'pending');
   }
-  if(status==='rejected')updates[it.rejectionColumn||'rejection_reason']=reason||null;
-  await updatePendingStatus(it.table,it.id,updates,it.pendingStatus||'pending');
   await logTransaction('update',it.table,it.id,(it.label||'')+' '+status+(status==='rejected'&&reason?' ('+reason+')':''),null,null,{status:status,reason:reason||null});
   // Approved variation orders become a BOQ line so field teams can log cost against them.
   if(status==='approved'&&it.table==='change_orders'){
@@ -3235,7 +3322,7 @@ async function writeApproval(it,status,reason){
         var vCode=co.co_number||('CO-'+String(it.id).slice(0,6));
         var dup=await supabase.from('boq_items').select('id').eq('project_id',co.project_id).eq('code',vCode).limit(1);
         if(!dup.error&&(!dup.data||!dup.data.length)){
-          await insertRow('boq_items',{project_id:co.project_id,section:'Variations / Change Orders',code:vCode,description:'[Approved Variation] '+(co.description||''),unit:'LS',quantity:1,rate:Number(co.amount)||0,sort_order:(state.boq?state.boq.length:0)+1,status:'approved'});
+          await insertRow('boq_items',{project_id:co.project_id,section:'Variations / Change Orders',code:vCode,description:'[Approved Variation] '+(co.description||''),unit:'LS',quantity:1,rate:Number(co.amount)||0,sort_order:(state.boq?state.boq.length:0)+1,status:'approved',created_by:'system'});
           if(state.currentProjectId===co.project_id)await reloadProjectTable('boq_items','sort_order',true);
           toast('Variation '+vCode+' added to BOQ ✓','ok');
         }
@@ -3533,6 +3620,7 @@ window.commitScan=async function(){
       invoice_date:d.invoiceDate||today(),
       terms:d.terms||null,
       status:isManagerRole()?'approved':'pending',
+      created_by:userProfile?userProfile.name:null,
       source:'OCR'
     });
     await reloadProjectTable('materials','created_at',false);closeModal();render();toast(t('savedOk')+' — remember to link to a BOQ item','ok');
@@ -3718,6 +3806,9 @@ window.renderTop=renderTop;
 window.loadCompanyData=loadCompanyData;
 window.toast=toast;
 window.openFormModal=openFormModal;
+window.SF.db.rpc=function(name,args){return supabase.rpc(name,args||{});};
+window.SF.suppliers={list:function(){return state.suppliers||[];},byId:function(id){return (state.suppliers||[]).find(function(x){return x.id===id;});},lookup:function(name){var n=String(name||'').trim().toLowerCase();if(!n)return[];return (state.suppliers||[]).filter(function(x){return String(x.name||'').toLowerCase().indexOf(n)===0||String(x.name||'').toLowerCase().indexOf(n)>=0;});}};
+window.SF.approvals={limits:function(){return state.approvalLimits||[];},eventsFor:fetchApprovalEvents,inbox:approvalInboxFilter,decide:approveViaRpc,creatorOf:itemCreator};
 
 console.log('[SiteForge v29.3] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
