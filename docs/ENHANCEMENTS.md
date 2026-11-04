@@ -116,6 +116,33 @@ equity **3,925**; balance-sheet diff **0.00**; P&L revenue **13,500**, gross **1
   `AR = Σ net_payable(certified) − max(0, receipts − Σ net_payable(paid))`. Covered by 7 new
   regression checks (47/47 in the finance suite).
 
+## 1.6 Workflow upgrade wave (v29.3)
+
+A specification for seven workflow upgrades arrived as a **monolith-era override module**
+(`gemini-code-*.js`). It expected `window.SiteForge.state` / `window.state` and replaced globals
+such as `window.newTimesheet`; in the v29 architecture those are private to the `app.js` IIFE,
+so `getState()` returned `undefined` and line 389 threw
+`Cannot read properties of undefined (reading 'boq')`.
+
+Rather than shipping a shim, the behaviour was **ported natively** and a compatibility surface
+(`window.SiteForge`, `window.state`, function aliases) was added so old patch files no longer
+crash the app.
+
+| Feature | Implementation |
+|---|---|
+| Clearable notifications & alerts | dismissals persisted (`sf_dismissed_alerts_v2`); DB `notifications.is_read` updated; badge + panel refresh |
+| Commitments vs actuals | PO stage gate in `getBoqActualsMap` + new `getBoqCommittedMap`; BOQ shows both |
+| PO → supplier bill | `convertPOToBill`/`commitPOBill`: 5% VAT, 30-day terms, supplier auto-register, AP entry, PO accrues |
+| BOQ valuation → IPC | `openBoqValuationSheet` / `recalcBoqValuation` / `applyBoqValuationToIPC` |
+| IPC → AR sync | `syncIPCToReceivables` on certified/paid, idempotent by invoice no, 30-day due |
+| Worker-linked timesheets | `timesheets.worker_id` (migration 202611041001) + worker select in the form |
+| Unified payroll run | basic + 1.5× approved OT − loan, loan balance update, payroll batch, salaries expense |
+| Variation lines | approved change order creates a BOQ line under "Variations / Change Orders" |
+| Cross-project queue | company-wide pending fetch after login; queue + badge populated with no project open |
+| WebP photos | canvas → `image/webp` (JPEG fallback), uploaded to the `siteforge-files` bucket |
+
+Verified by `node tools/checks/upgrade-wave.mjs` (11 checks) plus the existing 231 checks.
+
 ## 2. Audit backlog (still open)
 
 Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·
@@ -189,6 +216,7 @@ HTML lint (as CI runs it): `npx --yes htmlhint@1 "index.html"`.
 | `202611031002_finance_statements.sql` | `finance_settings` + RLS |
 | `202611031003_payslips.sql` | `payslips` + RLS |
 | `202611031004_po_approvals_and_site_photos.sql` | approver columns, `site_reports.photos` jsonb, `siteforge-files` bucket + storage policies |
+| `202611041001_worker_links_and_payroll.sql` | `timesheets.worker_id` + payroll/receivables indexes (v29.3) |
 
 Run them in the Supabase SQL editor. Until then the three modules show a migration hint card and
 the rest of the app is unaffected. RLS hardening (making the public anon key safe) is still the

@@ -3,6 +3,36 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [29.3.0] - 2026-11-04
+
+### Added
+- **Notifications & alerts are clearable**: "Mark all read" clears DB notifications *and*
+  compliance/budget alerts; individual alerts can be dismissed (persisted per browser in
+  `sf_dismissed_alerts_v2`), and the topbar badge/panel update immediately
+- **Commitments vs actuals**: approved POs in `Ordered` / `In Transit` count as committed cost;
+  only `Delivered` / `Inspected` / `Installed` hit BOQ actuals. BOQ shows committed + actual
+- **PO → supplier payable invoice** (1 click): 5% UAE VAT, 30-day credit terms, registers the
+  supplier in project parties, accrues the PO and posts the invoice to payables
+- **BOQ line-by-line IPC valuation sheet** (percent executed per line → prefills the IPC gross
+  valuation) and **IPC → receivables sync** for certified/paid certificates (idempotent by
+  invoice number, 30-day due date)
+- **Worker-linked timesheets** (`timesheets.worker_id`) and a **unified monthly payroll run**:
+  basic salary + approved overtime at 1.5× − loan installment, updates each worker's loan
+  balance, certifies the payroll batch and posts the salaries expense in one action
+- **Approved change orders auto-create a BOQ variation line** under "Variations / Change Orders"
+  so field teams can log cost against the variation
+- **Cross-project executive approvals queue**: pending BOQ/PO/CO/timesheet/expense items are
+  fetched company-wide after login, so the queue and badge work with no project selected
+- **WebP site-report photos** (smaller uploads; falls back to JPEG where WebP is unsupported)
+- **Compatibility surface for v28-era patch scripts** (`window.SiteForge`, `window.state` and
+  function aliases) — fixes `Uncaught TypeError: Cannot read properties of undefined
+  (reading 'boq')` when an old single-file patch module is loaded, and the new features above
+  are native ports of that specification
+
+### Changed
+- Version 29.3.0; service-worker cache bumped to `v29.3.0-1`
+- Migration added: `202611041001_worker_links_and_payroll.sql`
+
 ## [29.2.0] - 2026-11-03
 
 ### Added

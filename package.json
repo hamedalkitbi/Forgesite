@@ -1,6 +1,6 @@
 {
   "name": "forgesite",
-  "version": "29.2.0",
+  "version": "29.3.0",
   "private": true,
   "description": "SiteForge ERP - browser-based field-to-office construction cost certification SPA",
   "license": "MIT",
@@ -10,8 +10,8 @@
     "test": "node tools/run-tests.mjs",
     "icons": "node tools/make-icons.mjs",
     "test:views": "node tools/tests/app-views.mjs",
-    "test:features": "node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs",
-    "test:all": "node tools/run-tests.mjs && node tools/tests/app-views.mjs && node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs",
+    "test:features": "node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs",
+    "test:all": "node tools/run-tests.mjs && node tools/tests/app-views.mjs && node tools/checks/payment-requests.mjs && node tools/checks/finance.mjs && node tools/checks/payslips.mjs && node tools/checks/cross-module-math.mjs && node tools/checks/upgrade-wave.mjs",
     "screenshots": "node tools/screenshots.mjs && node tools/screenshots-modules.mjs"
   },
   "engines": {

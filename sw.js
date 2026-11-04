@@ -11,7 +11,7 @@
  */
 'use strict';
 
-var VERSION = 'v29.2.0-2';
+var VERSION = 'v29.3.0-1';
 var CACHE = 'forgesite-' + VERSION;
 
 var CORE = [

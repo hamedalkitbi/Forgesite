@@ -1,3 +1,11 @@
+/* SUPERSEDED — kept for reference only, NOT loaded by index.html.
+ * The behaviour in this file is implemented natively in scripts/app.js as of v29.3.0
+ * (notifications/alerts, commitments vs actuals, PO->bill, BOQ valuation, IPC->AR sync,
+ * worker-linked timesheets, unified payroll run, variation lines, cross-project queue,
+ * WebP photos). Loading it alongside the native implementation double-overrides globals;
+ * app.js now also exposes a compatibility surface so this style of patch cannot crash
+ * with "Cannot read properties of undefined (reading 'boq')".
+ * See docs/ENHANCEMENTS.md section 1.6. */
 /**
  * SiteForge ERP v29.2 — Complete End-to-End Workflow & Notification Upgrade Module
  * Implements:

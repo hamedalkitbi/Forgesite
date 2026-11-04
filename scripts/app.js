@@ -55,6 +55,10 @@ function getPendingCount(){
   if(state.expenses) c += state.expenses.filter(function(e){return (e.status||'approved')==='pending';}).length;
   if(state.materials) c += state.materials.filter(function(m){return (m.status||'approved')==='pending';}).length;
   if(state.changeOrders) c += state.changeOrders.filter(function(co){return co.status==='pending';}).length;
+  if(!state.currentProjectId&&state.globalPending){
+    var gp2=state.globalPending;
+    c+=(gp2.boq||[]).length+(gp2.ts||[]).length+(gp2.mat||[]).length+(gp2.co||[]).length+(gp2.exp||[]).length;
+  }
   (window.SF&&SF.approvalsSources||[]).forEach(function(fn){
     try{var extra=fn();if(Array.isArray(extra))c+=extra.length;}catch(e){}
   });
@@ -262,7 +266,7 @@ function applyI18nStatic(){
   if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
   var userEl=document.getElementById('loginUser');
   if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
-  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.2';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.3';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -388,6 +392,7 @@ function openApp(){
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('appShell').style.display='block';
   applyBranding();applyI18nStatic();refreshProjSelector();render();
+  setTimeout(function(){loadCrossProjectPending();},400);
 }
 function refreshProjSelector(){
   var sel=document.getElementById('projSelector');
@@ -429,10 +434,22 @@ function hasView(v){
   return !!(mod&&(mod.roles||[]).indexOf(userProfile.role)>=0);
 }
 
+/* ---- Alert dismissal (persisted per browser; also used by the notifications panel) ---- */
+var DISMISSED_ALERTS_KEY='sf_dismissed_alerts_v2';
+function getDismissedAlerts(){try{return JSON.parse(localStorage.getItem(DISMISSED_ALERTS_KEY)||'{}');}catch(e){return {};}}
+function saveDismissedAlerts(m){try{localStorage.setItem(DISMISSED_ALERTS_KEY,JSON.stringify(m||{}));}catch(e){}}
+function alertSig(prefix,a){return prefix+':'+((a&&a.title)||'')+'|'+((a&&a.detail)||'');}
+function filterDismissedAlerts(prefix,list){
+  var d=getDismissedAlerts();
+  return (list||[]).filter(function(a){return !d[alertSig(prefix,a)];});
+}
+/* A PO is a COMMITMENT until it is physically received; only accrued stages are actual cost. */
+var ACCRUED_MATERIAL_STAGES={Delivered:true,Inspected:true,Installed:true};
+
 function getBoqActualsMap(){
   var actualMap={};
   (state.materials||[]).forEach(function(mat){
-    if(mat.boq_item_id && (mat.status||'approved')==='approved'){
+    if(mat.boq_item_id && (mat.status||'approved')==='approved' && ACCRUED_MATERIAL_STAGES[mat.stage]){
       var cost=(Number(mat.qty)||0)*(Number(mat.unitCost)||0);
       actualMap[mat.boq_item_id]=(actualMap[mat.boq_item_id]||0)+cost;
     }
@@ -445,6 +462,18 @@ function getBoqActualsMap(){
   return actualMap;
 }
 window.getBoqActualsMap=getBoqActualsMap;
+/* Committed cost: approved POs that are ordered/in transit but not yet delivered. */
+function getBoqCommittedMap(){
+  var commMap={};
+  (state.materials||[]).forEach(function(mat){
+    if(mat.boq_item_id && (mat.status||'approved')==='approved' && !ACCRUED_MATERIAL_STAGES[mat.stage]){
+      var cost=(Number(mat.qty)||0)*(Number(mat.unitCost)||0);
+      commMap[mat.boq_item_id]=(commMap[mat.boq_item_id]||0)+cost;
+    }
+  });
+  return commMap;
+}
+window.getBoqCommittedMap=getBoqCommittedMap;
 
 function collectAlerts(){
   var out=[];
@@ -462,6 +491,7 @@ function collectAlerts(){
     if(c.renewal_due_date){var rd=daysUntil(c.renewal_due_date);if(rd!==null){if(rd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' renewal overdue',detail:fmtDate(c.renewal_due_date),days:rd});else if(rd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' renewal in '+rd+'d',detail:fmtDate(c.renewal_due_date),days:rd});}}
     if(c.payment_due_date){var pd=daysUntil(c.payment_due_date);if(pd!==null){if(pd<0)out.push({severity:'expired',title:(c.doc_type||'Doc')+' payment overdue',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});else if(pd<=30)out.push({severity:'soon',title:(c.doc_type||'Doc')+' payment in '+pd+'d',detail:money(c.amount||0)+' · '+fmtDate(c.payment_due_date),days:pd});}}
   });
+  out=filterDismissedAlerts('comp',out);
   out.sort(function(a,b){return a.days-b.days;});
   return out;
 }
@@ -483,6 +513,7 @@ function collectBudgetAlerts(){
       out.push({severity:'warning',title:Math.round(pct*100)+'% used: '+label,detail:'Spent '+money(actual)+' of '+money(budget)+' · '+money(budget-actual)+' remaining',budget:budget,actual:actual,overrun:0,pct:pct,itemId:i.id});
     }
   });
+  out=filterDismissedAlerts('bud',out);
   out.sort(function(a,b){
     var rank={overrun:0,warning:1};
     if(rank[a.severity]!==rank[b.severity])return rank[a.severity]-rank[b.severity];
@@ -1078,6 +1109,8 @@ window.deleteProject=function(id){
 function renderBOQ(el){
   var totalBudget=0, totalActual=0;
   var actualMap=getBoqActualsMap();
+  var committedMap=getBoqCommittedMap();
+  var totalCommitted=state.boq.reduce(function(sum,i){return sum+(committedMap[i.id]||0);},0);
   var approvedCOsTotal=state.changeOrders.filter(function(co){return co.status==='approved';}).reduce(function(s,co){return s+(Number(co.amount)||0);},0);
 
   var sections={};state.boq.forEach(function(i){var k=i.section||'Uncategorized';if(!sections[k])sections[k]=[];sections[k].push(i);});
@@ -1128,12 +1161,12 @@ function renderBOQ(el){
 
   el.innerHTML=
     '<h2 class="vt">'+t('boq')+'</h2>'+
-    '<div class="vsub">'+state.boq.length+' items'+'<span class="spacer"></span>'+
+    '<div class="vsub">'+state.boq.length+' items · Committed <b class="mono">'+money(totalCommitted)+'</b> · Actual <b class="mono">'+money(totalActual)+'</b>'+'<span class="spacer"></span>'+
       '<button class="btn ghost sm" onclick="exportBOQExcel()">📤 Excel</button> '+(canEdit?'<button class="btn ghost sm" onclick="openBOQImport()">'+t('importBtn')+'</button> <button class="btn" onclick="newBOQ()">'+t('addItem')+'</button>':'')+
     '</div>'+
     banner+
     '<div class="card"><div style="overflow-x:auto"><table>'+
-      '<thead><tr><th>'+t('code')+'</th><th>'+t('description')+'</th><th class="tright">Budget</th><th class="tright">Actual</th><th class="tright">Variance</th><th class="tright">Used</th><th></th></tr></thead>'+
+      '<thead><tr><th>'+t('code')+'</th><th>'+t('description')+'</th><th class="tright">Budget</th><th class="tright">Actual <span class="mutc" style="font-size:9px;text-transform:none">+ committed</span></th><th class="tright">Variance</th><th class="tright">Used</th><th></th></tr></thead>'+
       '<tbody>'+(state.boq.length?Object.keys(sections).map(function(sec){
         return '<tr><td colspan="7" style="background:var(--panel2);font-weight:800;font-size:11.5px;text-transform:uppercase;color:var(--accent)">'+esc(sec)+'</td></tr>'+
           sections[sec].map(function(i){
@@ -1148,7 +1181,7 @@ function renderBOQ(el){
             var pctCls=overrun?'bad':(warning?'warn':'ok');
             return '<tr style="'+rowStyle+'"><td class="mono mutc">'+esc(i.code||'—')+'</td><td>'+esc(i.desc)+(i.status==='pending'?' <span class="tag warn">PENDING</span>':i.status==='rejected'?' <span class="tag bad">REJECTED</span>':'')+'</td>'+
               '<td class="tright mono">'+money(boqAmt)+'</td>'+
-              '<td class="tright mono" style="color:var(--info)">'+money(actAmt)+'</td>'+
+              '<td class="tright mono" style="color:var(--info)">'+money(actAmt)+((committedMap[i.id]||0)?'<div class="mutc" style="font-size:9.5px">+'+money(committedMap[i.id])+' committed</div>':'')+'</td>'+
               '<td class="tright mono '+(variance>=0?'okc':'badc')+'"><b>'+money(variance)+'</b></td>'+
               '<td class="tright"><span class="tag '+pctCls+'">'+Math.round(pct*100)+'%</span>'+(overrun?' <span class="tag bad" style="font-size:9px">OVER</span>':'')+'</td>'+
               '<td class="tright" style="white-space:nowrap">'+(isManagerRole()&&i.status==='pending'?'<button class="btn ok sm" onclick="approveItem(\'boq_items\',\''+esc(i.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'boq_items\',\''+esc(i.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editBOQ(\''+esc(i.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteBOQ(\''+esc(i.id)+'\')">✕</button>':'')+'</td></tr>';
@@ -1562,6 +1595,55 @@ window.newBilling=function(){
   },50);
 };
 
+/* Per-line BOQ valuation → prefills the IPC gross valuation. */
+window.openBoqValuationSheet=function(){
+  if(!state.boq.length)return toast('No BOQ items found in this project','bad');
+  var rows=state.boq.filter(function(i){return (i.status||'approved')==='approved';}).map(function(i){
+    var lineTotal=(Number(i.qty)||0)*(Number(i.rate)||0);
+    return '<tr><td class="mono">'+esc(i.code||'—')+'</td><td>'+esc(i.desc)+'</td><td class="tright mono">'+money(lineTotal)+'</td><td class="tright"><input type="number" class="boq-val-pct" data-total="'+lineTotal+'" min="0" max="100" step="1" value="0" oninput="recalcBoqValuation()" style="width:80px;padding:4px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;text-align:right"> %</td></tr>';
+  }).join('');
+  openModal('📋 BOQ line-by-line IPC valuation',
+    '<div style="max-height:55vh;overflow:auto"><table><thead><tr><th>Code</th><th>Description</th><th class="tright">BOQ value</th><th class="tright">% executed</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div class="card" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center"><span>Calculated cumulative gross valuation</span><b class="mono okc" id="boqValResult" style="font-size:16px">AED 0.00</b></div>',
+    '<button class="btn ghost" onclick="closeModal()">'+t('cancel')+'</button><button class="btn ok" onclick="applyBoqValuationToIPC()">Apply to IPC →</button>',{wide:true});
+};
+window.recalcBoqValuation=function(){
+  var inputs=document.querySelectorAll('.boq-val-pct'),sum=0;
+  for(var i=0;i<inputs.length;i++){
+    var lineTot=Number(inputs[i].getAttribute('data-total'))||0;
+    var pct=Math.min(100,Math.max(0,Number(inputs[i].value)||0));
+    sum+=lineTot*(pct/100);
+  }
+  sum=Math.round(sum*100)/100;window._lastBoqValSum=sum;
+  var el=document.getElementById('boqValResult');if(el)el.textContent=money(sum);
+};
+window.applyBoqValuationToIPC=function(){
+  var val=window._lastBoqValSum||0;
+  closeModal();window.newBilling();
+  setTimeout(function(){var el=document.getElementById('f_total_claim');if(el)el.value=val.toFixed(2);},80);
+};
+/* Certified/paid IPCs become a receivable in the payments ledger (idempotent by invoice no). */
+async function syncIPCToReceivables(b){
+  if(!b||!supabase)return;
+  var status=b.status;
+  if(status!=='certified'&&status!=='paid')return;
+  var invRef=b.billing_no||b.billingNo;if(!invRef)return;
+  var amount=Number(b.total_payable_inc_vat!=null?b.total_payable_inc_vat:b.totalPayableIncVat)||0;
+  var due=new Date();due.setDate(due.getDate()+30);
+  var dueStr=due.getFullYear()+'-'+String(due.getMonth()+1).padStart(2,'0')+'-'+String(due.getDate()).padStart(2,'0');
+  try{
+    var ex=await supabase.from('payments').select('*').eq('invoice_no',invRef).limit(1);
+    var row=ex&&ex.data&&ex.data[0];
+    if(row){
+      await updateRow('payments',row.id,{payment_type:status==='paid'?'received':'pending',amount:amount,status:status==='paid'?'paid':'pending',paid_date:status==='paid'?today():row.paid_date});
+    }else{
+      await insertRow('payments',{project_id:state.currentProjectId,payment_type:status==='paid'?'received':'pending',invoice_no:invRef,description:'Client IPC receivable — '+invRef,amount:amount,due_date:dueStr,paid_date:status==='paid'?today():null,status:status==='paid'?'paid':'pending',payment_method:'Bank Transfer'});
+    }
+    await reloadProjectTable('payments','created_at',false);
+  }catch(e){console.warn('IPC → receivables sync skipped:',e);}
+}
+window.syncIPCToReceivables=syncIPCToReceivables;
+
 window.editBilling=function(id){
   var b=state.billings.find(function(x){return x.id===id;});if(!b)return;
   openFormModal({title:t('edit')+' IPC — '+esc(b.billingNo),wide:true,
@@ -1595,6 +1677,7 @@ window.editBilling=function(id){
         vat_amount:ipc.vat,
         total_payable_inc_vat:ipc.totalIncVat
       });
+      await syncIPCToReceivables({billing_no:d.billing_no,status:d.status,total_payable_inc_vat:ipc.totalIncVat});
       await reloadProjectTable('progress_billings','created_at',false);render();toast(t('updatedOk'),'ok');
     }
   });
@@ -1629,7 +1712,7 @@ function renderMaterials(el){
   el.innerHTML='<h2 class="vt">▦ '+t('materials')+'</h2><div class="vsub">'+state.materials.length+(unlinked.length?' · <span class="warnc">'+unlinked.length+' not linked to BOQ</span>':'')+(canEdit?'<span class="spacer"></span><button class="btn" onclick="newMaterial()">'+t('newItem')+'</button>':'')+'</div><div class="card"><div style="overflow-x:auto"><table><thead><tr><th>PO</th><th>'+t('supplier')+'</th><th>'+t('description')+'</th><th>BOQ Link</th><th class="tright">'+t('qty')+'</th><th class="tright">Cost</th><th>Stage</th><th></th></tr></thead><tbody>'+(state.materials.length?state.materials.map(function(m){
     var boqItem=boqMap[m.boq_item_id];
     var boqLabel=boqItem?esc((boqItem.code||'')+' '+boqItem.desc.slice(0,24)):'<span class="warnc" style="font-size:10.5px">⚠ Unlinked</span>';
-    return '<tr><td class="mono" style="color:var(--accent)">'+esc(m.po)+((m.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(m.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+(m.approvedBy?'<div class="mutc" style="font-size:10px">'+esc(m.approvedBy)+'</div>':'')+'</td><td>'+esc(m.supplier)+'</td><td>'+esc(m.desc)+'</td><td style="font-size:11px">'+boqLabel+'</td><td class="tright">'+m.qty+' '+esc(m.unit||'')+'</td><td class="tright mono">'+money(m.unitCost)+'</td><td><span class="tag info">'+esc(m.stage)+'</span></td><td class="tright" style="white-space:nowrap">'+(isManagerRole()&&(m.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'materials\',\''+esc(m.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'materials\',\''+esc(m.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editMaterial(\''+esc(m.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteMaterial(\''+esc(m.id)+'\')">✕</button>':'')+'</td></tr>';
+    return '<tr><td class="mono" style="color:var(--accent)">'+esc(m.po)+((m.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(m.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+(m.approvedBy?'<div class="mutc" style="font-size:10px">'+esc(m.approvedBy)+'</div>':'')+'</td><td>'+esc(m.supplier)+'</td><td>'+esc(m.desc)+'</td><td style="font-size:11px">'+boqLabel+'</td><td class="tright">'+m.qty+' '+esc(m.unit||'')+'</td><td class="tright mono">'+money(m.unitCost)+'</td><td><span class="tag info">'+esc(m.stage)+'</span></td><td class="tright" style="white-space:nowrap">'+(isManagerRole()&&(m.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'materials\',\''+esc(m.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'materials\',\''+esc(m.id)+'\')">✕</button> ':'')+(canEdit&&(m.status||'approved')==='approved'?'<button class="btn ghost sm" title="Convert PO to supplier bill" onclick="convertPOToBill(\''+esc(m.id)+'\')">🧾</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editMaterial(\''+esc(m.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteMaterial(\''+esc(m.id)+'\')">✕</button>':'')+'</td></tr>';
   }).join(''):'<tr><td colspan="8" class="empty"><div class="big">▦</div>'+t('noData')+'</td></tr>')+'</tbody></table></div></div>';
 }
 window.newMaterial=function(){
@@ -1692,6 +1775,49 @@ window.editMaterial=function(id){
     }
   });
 };
+window.convertPOToBill=function(matId){
+  var m=(state.materials||[]).find(function(x){return x.id===matId;});
+  if(!m)return toast('Material PO not found','bad');
+  if((m.status||'approved')!=='approved')return toast('Approve the PO before billing it','bad');
+  var subtotal=Math.round((Number(m.qty)||0)*(Number(m.unitCost)||0)*100)/100;
+  var vat=Math.round(subtotal*0.05*100)/100;
+  var totalIncVat=Math.round((subtotal+vat)*100)/100;
+  var due=new Date();due.setDate(due.getDate()+30);
+  var dueStr=due.getFullYear()+'-'+String(due.getMonth()+1).padStart(2,'0')+'-'+String(due.getDate()).padStart(2,'0');
+  openModal('🧾 Convert PO to Supplier Payable Invoice',
+    '<div class="fgrid">'+
+      '<div class="field"><label>PO Number</label><input id="po_bill_po" value="'+esc(m.po||'')+'" readonly></div>'+
+      '<div class="field"><label>Supplier</label><input id="po_bill_sup" value="'+esc(m.supplier||'')+'"></div>'+
+      '<div class="field"><label>Supplier Invoice # *</label><input id="po_bill_inv" value="'+esc(m.invoiceNo||('BILL-'+(m.po||'')))+'"></div>'+
+      '<div class="field"><label>Due Date (30-day credit)</label><input id="po_bill_due" type="date" value="'+dueStr+'"></div>'+
+      '<div class="field"><label>Subtotal (excl. VAT)</label><input id="po_bill_sub" type="number" step="0.01" value="'+subtotal.toFixed(2)+'"></div>'+
+      '<div class="field"><label>Total payable (incl. 5% VAT)</label><input id="po_bill_tot" type="number" step="0.01" value="'+totalIncVat.toFixed(2)+'"></div>'+
+      '<div class="field full"><label>Description</label><input id="po_bill_desc" value="Supplier bill for '+esc(m.po||'')+' — '+esc(m.desc||'')+'"></div>'+
+    '</div>',
+    '<button class="btn ghost" onclick="closeModal()">'+t('cancel')+'</button><button class="btn ok" onclick="commitPOBill(\''+esc(m.id)+'\')">Post payable invoice →</button>',{wide:true});
+};
+window.commitPOBill=async function(matId){
+  var m=(state.materials||[]).find(function(x){return x.id===matId;});if(!m)return;
+  var invNo=(document.getElementById('po_bill_inv').value||'').trim();
+  var sup=(document.getElementById('po_bill_sup').value||'').trim();
+  var due=document.getElementById('po_bill_due').value||null;
+  var tot=Number(document.getElementById('po_bill_tot').value)||0;
+  var desc=(document.getElementById('po_bill_desc').value||'').trim();
+  if(!invNo)return toast('Supplier invoice number is required','bad');
+  if(tot<=0)return toast('Amount must be greater than zero','bad');
+  var btn=document.querySelector('#modalRoot .btn.ok');if(btn)btn.disabled=true;
+  try{
+    if(sup)await ensureSupplier(sup,state.currentProjectId);
+    var newStage=ACCRUED_MATERIAL_STAGES[m.stage]?m.stage:'Inspected';
+    await updateRow('materials',m.id,{stage:newStage,invoice_no:invNo});
+    await insertRow('payments',{project_id:state.currentProjectId,payment_type:'invoice',invoice_no:invNo,description:'[AP · '+sup+'] '+desc,amount:tot,due_date:due,status:'pending',payment_method:'Bank Transfer'});
+    await reloadProjectTable('materials','created_at',false);
+    await reloadProjectTable('payments','created_at',false);
+    closeModal();render();
+    toast('Supplier bill posted to payables ✓','ok');
+  }catch(e){if(btn)btn.disabled=false;toast('Failed: '+((e&&e.message)||e),'bad');}
+};
+
 window.deleteMaterial=function(id){if(!confirm('Delete?'))return;deleteRow('materials',id).then(async function(){await reloadProjectTable('materials','created_at',false);render();toast(t('deletedOk'),'ok');}).catch(function(e){toast(e.message,'bad');});};
 
 function renderPayments(el){
@@ -1799,10 +1925,12 @@ function renderTimesheets(el){
 }
 window.newTimesheet=function(){
   var boqOptions=state.boq.map(function(item){return {value:item.id,label:(item.code?item.code+' - ':'')+item.desc.slice(0,50)};});
+  var activeWorkers=(state.workers||[]).filter(function(w){return w.status!=='inactive';});
+  var workerOptions=activeWorkers.map(function(w){return {value:w.name,label:(w.staff_no?w.staff_no+' · ':'')+w.name+(w.trade?' ('+w.trade+')':'')};});
   openFormModal({title:t('newItem')+' timesheet',
     fields:[
       {key:'boq_item_id',label:'BOQ Item / البند (Searchable)',type:'searchable_select',options:boqOptions,full:true},
-      {key:'employee_name',label:'Worker',required:true,full:true},
+      {key:'employee_name',label:'Worker (linked to staff register)',type:workerOptions.length?'select':'text',options:workerOptions,required:true,full:true},
       {key:'trade',label:t('trade'),type:'select',options:['CONC','STEL','ELEC','HVAC','DRYW','HEQV']},
       {key:'work_date',label:t('date'),type:'date',required:true,default:today()},
       {key:'reg_hours',label:'Regular',type:'number',step:'0.25',default:8},
@@ -1812,11 +1940,13 @@ window.newTimesheet=function(){
     onSubmit:async function(d){
       var total=(Number(d.reg_hours)||0)+(Number(d.ot_hours)||0);
       var cost=(Number(d.reg_hours)||0)*Number(d.rate_aed)+(Number(d.ot_hours)||0)*Number(d.rate_aed)*1.5;
+      var wrk=activeWorkers.filter(function(w){return w.name===d.employee_name;})[0]||null;
       await insertRow('timesheets',{
         project_id:state.currentProjectId,
         boq_item_id:d.boq_item_id||null,
+        worker_id:wrk?wrk.id:null,
         employee_name:d.employee_name,
-        trade:d.trade,
+        trade:d.trade||(wrk&&wrk.trade)||null,
         work_date:d.work_date,
         reg_hours:Number(d.reg_hours),
         ot_hours:Number(d.ot_hours),
@@ -1896,31 +2026,57 @@ function renderPayroll(el){
 }
 window.newPayrollBatch=function(){
   var curPeriod=today().slice(0,7);
-  var approved=state.timesheets.filter(function(x){return x.status==='approved'&&String(x.date||'').slice(0,7)===curPeriod;});
-  var workers={};var gross=0;
-  approved.forEach(function(x){workers[x.name]=true;gross+=(Number(x.cost)||0);});
-  var workerCount=Object.keys(workers).length;
-  openFormModal({
-    title:'Certify Payroll Batch',
-    values:{period:today().slice(0,7),worker_count:workerCount,gross_aed:gross,net_aed:gross},
-    fields:[
-      {key:'period',label:t('period')+' (e.g. 2026-10)',required:true},
-      {key:'worker_count',label:'Workers Count',type:'number',step:'1',required:true},
-      {key:'gross_aed',label:'Gross Amount (AED)',type:'number',step:'0.01',required:true},
-      {key:'net_aed',label:'Net Payable (AED)',type:'number',step:'0.01',required:true}
-    ],
-    onSubmit:async function(d){
-      await insertRow('payroll_batches',{
-        project_id:state.currentProjectId,
-        period:d.period,
-        worker_count:Number(d.worker_count)||0,
-        gross_aed:Number(d.gross_aed)||0,
-        net_aed:Number(d.net_aed)||0,
-        certified_at:new Date().toISOString()
-      });
-      await reloadProjectTable('payroll_batches','certified_at',false);render();toast(t('savedOk'),'ok');
+  var activeWorkers=(state.workers||[]).filter(function(w){return w.status!=='inactive';});
+  var approvedTS=(state.timesheets||[]).filter(function(x){return x.status==='approved'&&String(x.date||'').slice(0,7)===curPeriod;});
+  var otByWorker={};
+  approvedTS.forEach(function(ts){
+    var otPay=(Number(ts.otHours)||0)*(Number(ts.rate)||0)*1.5;
+    otByWorker[ts.name]=(otByWorker[ts.name]||0)+otPay;
+  });
+  var lines=[],totalGross=0,totalDeduct=0,totalNet=0;
+  activeWorkers.forEach(function(w){
+    var pay=parseWorkerPay(w.notes);
+    var otPay=Math.round((otByWorker[w.name]||0)*100)/100;
+    var gross=Math.round((pay.salary+otPay)*100)/100;
+    var want=Math.max(0,pay.deduct||0);
+    var deduct=Math.round(Math.min(want,pay.loan,gross)*100)/100;
+    var net=Math.max(0,Math.round((gross-deduct)*100)/100);
+    var remLoan=Math.round(Math.max(0,pay.loan-deduct)*100)/100;
+    if(gross>0||approvedTS.some(function(x){return x.name===w.name;})){
+      lines.push({workerId:w.id,staffNo:w.staff_no||'—',name:w.name,basic:pay.salary,otPay:otPay,gross:gross,deduct:deduct,net:net,remLoan:remLoan,origDeduct:pay.deduct||0,rawNotes:pay.notes});
+      totalGross+=gross;totalDeduct+=deduct;totalNet+=net;
     }
   });
+  totalGross=Math.round(totalGross*100)/100;totalDeduct=Math.round(totalDeduct*100)/100;totalNet=Math.round(totalNet*100)/100;
+  window._pendingPayrollRun={period:curPeriod,lines:lines,totalGross:totalGross,totalDeduct:totalDeduct,totalNet:totalNet};
+  var rows=lines.length?lines.map(function(ln){
+    return '<tr><td class="mono">'+esc(ln.staffNo)+'</td><td><b>'+esc(ln.name)+'</b></td><td class="tright mono">'+money(ln.basic)+'</td><td class="tright mono infoc">'+money(ln.otPay)+'</td><td class="tright mono warnc">-'+money(ln.deduct)+'</td><td class="tright mono okc"><b>'+money(ln.net)+'</b></td></tr>';
+  }).join(''):'<tr><td colspan="6" class="empty">No active workers with salary or approved timesheets for '+esc(curPeriod)+'</td></tr>';
+  openModal('💸 Unified Monthly Payroll Run — '+curPeriod,
+    '<div class="mutc" style="font-size:12px;margin-bottom:10px">Monthly basic salary + approved site overtime (1.5×) − loan installments, pulled from the staff register and approved timesheets.</div>'+
+    '<div style="max-height:50vh;overflow:auto"><table><thead><tr><th>Staff #</th><th>Worker</th><th class="tright">Basic</th><th class="tright">Approved OT</th><th class="tright">Loan deduct</th><th class="tright">Net pay</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<div class="card" style="margin-top:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px"><div>Gross: <b class="mono">'+money(totalGross)+'</b></div><div>Loan recovered: <b class="mono warnc">'+money(totalDeduct)+'</b></div><div>Net disbursed: <b class="mono okc">'+money(totalNet)+'</b></div></div>',
+    '<button class="btn ghost" onclick="closeModal()">'+t('cancel')+'</button><button class="btn ok" onclick="commitUnifiedPayrollRun()">Certify & disburse →</button>',{wide:true});
+};
+window.commitUnifiedPayrollRun=async function(){
+  var run=window._pendingPayrollRun;
+  if(!run||!run.lines.length)return closeModal();
+  var btn=document.querySelector('#modalRoot .btn.ok');if(btn)btn.disabled=true;
+  try{
+    for(var i=0;i<run.lines.length;i++){
+      var ln=run.lines[i];
+      if(ln.deduct>0){
+        var newNotes=packWorkerNotes({salary_aed:ln.basic,loan_balance:ln.remLoan,loan_deduction:ln.origDeduct,notes:ln.rawNotes});
+        await updateRow('workers',ln.workerId,{notes:newNotes});
+      }
+    }
+    await insertRow('payroll_batches',{project_id:state.currentProjectId,period:run.period,worker_count:run.lines.length,gross_aed:run.totalGross,net_aed:run.totalNet,certified_at:new Date().toISOString()});
+    await insertRow('company_expenses',{category:'Salaries',description:'Certified monthly payroll run ('+run.period+' · '+run.lines.length+' workers)',amount:run.totalNet,expense_date:today(),paid_to:'WPS Payroll Batch',payment_method:'Bank Transfer',status:'approved'});
+    await loadCompanyData();
+    await reloadProjectTable('payroll_batches','certified_at',false);
+    closeModal();render();
+    toast('Payroll certified · loans updated · expense posted ✓','ok');
+  }catch(e){if(btn)btn.disabled=false;toast('Payroll error: '+((e&&e.message)||e),'bad');}
 };
 /* === CHUNK 3 STARTS HERE === */
 function renderAudit(el){
@@ -2582,7 +2738,7 @@ async function uploadReportPhotos(reportId,errEl){
     var fname=String(p.name||'photo.jpg').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-60);
     var path=state.currentProjectId+'/site-reports/'+reportId+'/'+Date.now()+'_'+i+'_'+fname;
     var up;
-    try{up=await supabase.storage.from('siteforge-files').upload(path,p.blob,{upsert:false,contentType:'image/jpeg'});}catch(e){up={error:e};}
+    try{up=await supabase.storage.from('siteforge-files').upload(path,p.blob,{upsert:false,contentType:p.mime||'image/webp'});}catch(e){up={error:e};}
     if(!up||up.error){
       var msg=(up&&up.error&&(up.error.message||up.error))||'upload failed';
       if(errEl)errEl.textContent='✗ Photo "'+(p.name||(i+1))+'" could not be uploaded — report not saved. '+msg+' (check the siteforge-files bucket and its storage policies)';
@@ -2615,11 +2771,14 @@ window.handleReportPhotos=function(ev){
         canvas.width=Math.round(img.width*scale);
         canvas.height=Math.round(img.height*scale);
         canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
+        var mime='image/webp';
+        try{if(canvas.toDataURL('image/webp').indexOf('data:image/webp')!==0)mime='image/jpeg';}catch(e){mime='image/jpeg';}
         canvas.toBlob(function(blob){
           if(!blob){toast('✗ Could not process '+f.name,'bad');return;}
-          window._reportPhotos.push({name:f.name,blob:blob,preview:URL.createObjectURL(blob),size:blob.size});
+          var cleanName=String(f.name||'photo').replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9._-]/g,'_')+(mime==='image/webp'?'.webp':'.jpg');
+          window._reportPhotos.push({name:cleanName,mime:mime,blob:blob,preview:URL.createObjectURL(blob),size:blob.size});
           renderReportPhotoGrid();
-        },'image/jpeg',0.78);
+        },mime,0.78);
       };
       img.onerror=function(){toast('✗ '+f.name+' is not a valid image','bad');};
       img.src=e.target.result;
@@ -2864,6 +3023,29 @@ window.deleteUser=async function(id){
 var historyState={filter:'all',rows:[],search:''};
 var APP_PRESETS=['Budget ceiling exceeded','Takeoff quantity discrepancy','Unit rate schedule renegotiation','Missing biometric timesheet logs','Lacks client written variation notice','Duplicate requisition'];
 function approvalKey(table,id){return table+'|'+id;}
+/* Company-wide pending approvals, fetched once after login so the Executive queue is
+   populated even when no project is open (previously it only saw the current project). */
+async function loadCrossProjectPending(){
+  if(!supabase)return;
+  try{
+    var projMap={};(state.projects||[]).forEach(function(p){projMap[p.id]=p.code||p.name;});
+    var qs=['boq_items','timesheets','materials','change_orders'].map(function(t){
+      return supabase.from(t).select('*').eq('status','pending').limit(200);
+    });
+    qs.push(supabase.from('company_expenses').select('*').eq('status','pending').limit(200));
+    var res=await Promise.all(qs);
+    state.globalPending={
+      boq:(res[0].data||[]).map(function(x){x._projCode=projMap[x.project_id]||'—';return x;}),
+      ts:(res[1].data||[]).map(function(x){x._projCode=projMap[x.project_id]||'—';return x;}),
+      mat:(res[2].data||[]).map(function(x){x._projCode=projMap[x.project_id]||'—';return x;}),
+      co:(res[3].data||[]).map(function(x){x._projCode=projMap[x.project_id]||'—';return x;}),
+      exp:(res[4].data||[])
+    };
+    if(!state.currentProjectId)renderTop();
+  }catch(e){console.warn('Cross-project pending query skipped:',e);}
+}
+window.loadCrossProjectPending=loadCrossProjectPending;
+
 function collectPendingItems(filter){
   var items=[];
   var all=!filter||filter==='all';
@@ -2871,6 +3053,14 @@ function collectPendingItems(filter){
   if(all||filter==='ts') (state.timesheets||[]).forEach(function(x){if(x.status==='pending')items.push({type:'Labor',cat:'Labor',id:x.id,table:'timesheets',label:(x.name||'')+' · '+(x.date||''),amount:Number(x.cost)||0,project:state.currentProject?state.currentProject.code:'—',submitter:x.name||'—'});});
   if(all||filter==='exp') (state.expenses||[]).forEach(function(e){if((e.status||'approved')==='pending')items.push({type:'Expense',cat:'Expenses',id:e.id,table:'company_expenses',label:e.description||e.category||'Expense',amount:Number(e.amount)||0,project:'Company',submitter:e.created_by||'—'});});
   if(all||filter==='mat') (state.materials||[]).forEach(function(m){if((m.status||'approved')==='pending')items.push({type:'PO',cat:'POs',id:m.id,table:'materials',label:(m.po||'')+' · '+(m.desc||'').slice(0,40),amount:(Number(m.qty)||0)*(Number(m.unitCost)||0),project:state.currentProject?state.currentProject.code:'—',submitter:m.supplier||'—'});});
+  if(!state.currentProjectId&&state.globalPending){
+    var gp=state.globalPending;
+    (gp.boq||[]).forEach(function(x){items.push({type:'BOQ',cat:'BOQ',id:x.id,table:'boq_items',label:((x.code||'')+' '+(x.description||'')).trim().slice(0,80),amount:(Number(x.quantity)||0)*(Number(x.rate)||0),project:x._projCode||'—',submitter:'—'});});
+    (gp.ts||[]).forEach(function(x){items.push({type:'Labor',cat:'Labor',id:x.id,table:'timesheets',label:(x.employee_name||'')+' · '+(x.work_date||''),amount:Number(x.total_cost_aed)||0,project:x._projCode||'—',submitter:x.employee_name||'—'});});
+    (gp.mat||[]).forEach(function(x){items.push({type:'PO',cat:'POs',id:x.id,table:'materials',label:(x.po_number||'')+' · '+(x.description||'').slice(0,40),amount:(Number(x.quantity)||0)*(Number(x.unit_cost_aed)||0),project:x._projCode||'—',submitter:'—'});});
+    (gp.co||[]).forEach(function(x){items.push({type:'CO',cat:'Change Orders',id:x.id,table:'change_orders',label:(x.co_number||'')+' · '+(x.description||'').slice(0,40),amount:Number(x.amount)||0,project:x._projCode||'—',submitter:'—'});});
+    (gp.exp||[]).forEach(function(x){items.push({type:'Expense',cat:'Expenses',id:x.id,table:'company_expenses',label:x.description||x.category||'Expense',amount:Number(x.amount)||0,project:'Company',submitter:x.created_by||'—'});});
+  }
   (window.SF&&SF.approvalsSources||[]).forEach(function(fn){
     try{var extra=fn();if(Array.isArray(extra))items=items.concat(extra);}catch(e){console.warn('[SiteForge] approvals source failed',e);}
   });
@@ -3036,6 +3226,22 @@ async function writeApproval(it,status,reason){
   if(status==='rejected')updates[it.rejectionColumn||'rejection_reason']=reason||null;
   await updatePendingStatus(it.table,it.id,updates,it.pendingStatus||'pending');
   await logTransaction('update',it.table,it.id,(it.label||'')+' '+status+(status==='rejected'&&reason?' ('+reason+')':''),null,null,{status:status,reason:reason||null});
+  // Approved variation orders become a BOQ line so field teams can log cost against them.
+  if(status==='approved'&&it.table==='change_orders'){
+    try{
+      var coR=await supabase.from('change_orders').select('*').eq('id',it.id).single();
+      var co=coR&&coR.data;
+      if(co&&co.project_id){
+        var vCode=co.co_number||('CO-'+String(it.id).slice(0,6));
+        var dup=await supabase.from('boq_items').select('id').eq('project_id',co.project_id).eq('code',vCode).limit(1);
+        if(!dup.error&&(!dup.data||!dup.data.length)){
+          await insertRow('boq_items',{project_id:co.project_id,section:'Variations / Change Orders',code:vCode,description:'[Approved Variation] '+(co.description||''),unit:'LS',quantity:1,rate:Number(co.amount)||0,sort_order:(state.boq?state.boq.length:0)+1,status:'approved'});
+          if(state.currentProjectId===co.project_id)await reloadProjectTable('boq_items','sort_order',true);
+          toast('Variation '+vCode+' added to BOQ ✓','ok');
+        }
+      }
+    }catch(e){console.warn('Could not auto-append approved CO to BOQ:',e);}
+  }
 }
 async function runApprovalBatch(items,status,reason){
   if(window._batchBusy)return;
@@ -3052,6 +3258,7 @@ async function runApprovalBatch(items,status,reason){
   await logTransaction(status==='approved'?'approve':'reject','approvals',null,(status==='approved'?'Batch approve ':'Batch reject ')+okItems.length+(okItems.length!==items.length?' of '+items.length:'')+' · '+money(exp.total),state.currentProjectId||null,null,{status:status,reason:reason||null,count:okItems.length,failed:failed,exposure:exp.total,categories:exp.by});
   await refreshApprovalTables(items);
   if(window.SF&&SF.approvalsRefresh)SF.approvalsRefresh.forEach(function(fn){try{fn();}catch(e){}});
+  loadCrossProjectPending();
   items.forEach(function(it){if(failed.indexOf(approvalKey(it.table,it.id))<0)delete window._appSel[approvalKey(it.table,it.id)];});
   closeModal();
   render();
@@ -3098,6 +3305,7 @@ window.approveItem=async function(table,id){
     await writeApproval(it,'approved',null);
     await refreshApprovalTables([it]);
     if(window.SF&&SF.approvalsRefresh)SF.approvalsRefresh.forEach(function(fn){try{fn();}catch(e){}});
+  loadCrossProjectPending();
     delete (window._appSel||{})[approvalKey(table,id)];
     render();toast('Approved ✓','ok');
   }catch(e){toast('Failed: '+(e.message||e),'bad');}
@@ -3142,32 +3350,76 @@ async function loadNotifications(){
   var r=await supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(20);
   if(r.data)state.notifications=r.data;
   renderTop();
+  renderNotifList();
 }
-window.closeNotifPanel=function(){var p=document.getElementById('notifPanel');if(p)p.classList.remove('on');};
+window.closeNotifPanel=function(){var p=document.getElementById('notifPanel');if(p)p.classList.remove('on');var b=document.getElementById('notifBtn');if(b)b.setAttribute('aria-expanded','false');};
+window.updateNotifBadge=function(){
+  var alerts=collectAlerts(),budgetAlerts=collectBudgetAlerts();
+  var unread=(state.notifications||[]).filter(function(n){return !n.is_read;}).length;
+  var b=document.getElementById('notifBadge');
+  if(b){var total=unread+alerts.length+budgetAlerts.length;b.style.display=total?'inline-block':'none';b.textContent=total;}
+};
+window.renderNotifList=function(){
+  var list=document.getElementById('notifList');if(!list)return;
+  var alerts=collectAlerts(),budgetAlerts=collectBudgetAlerts();
+  var unread=(state.notifications||[]).filter(function(n){return !n.is_read;});
+  var h='';
+  function dismissBtn(sig){return '<button class="btn ghost sm" title="Dismiss" aria-label="Dismiss alert" onclick="event.stopPropagation();dismissSingleAlert(\''+esc(sig)+'\')">✕</button>';}
+  if(budgetAlerts.length){
+    var ovr=budgetAlerts.filter(function(a){return a.severity==='overrun';}).length;
+    h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--bad);background:rgba(248,81,73,.08);letter-spacing:.5px">BUDGET ALERTS ('+budgetAlerts.length+(ovr?' · '+ovr+' OVERRUN':'')+')</div>';
+    h+=budgetAlerts.slice(0,10).map(function(a){
+      return '<div class="notif-item '+(a.severity==='overrun'?'alert':'warn')+'" style="display:flex;align-items:flex-start;gap:8px"><div style="flex:1" onclick="closeNotifPanel();goView(\'boq\')"><div class="title">'+esc(a.title)+'</div><div class="body">'+esc(a.detail)+'</div></div>'+dismissBtn(alertSig('bud',a))+'</div>';
+    }).join('');
+  }
+  if(alerts.length){
+    h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--muted);background:var(--panel2)">COMPLIANCE ALERTS ('+alerts.length+')</div>';
+    h+=alerts.slice(0,10).map(function(a){
+      return '<div class="notif-item '+(a.severity==='expired'?'alert':'warn')+'" style="display:flex;align-items:flex-start;gap:8px"><div style="flex:1" onclick="closeNotifPanel();goView(\'compliance\')"><div class="title">'+esc(a.title)+'</div><div class="body">'+esc(a.detail)+'</div></div>'+dismissBtn(alertSig('comp',a))+'</div>';
+    }).join('');
+  }
+  if(unread.length){
+    h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--muted);background:var(--panel2)">SYSTEM NOTIFICATIONS ('+unread.length+')</div>';
+    h+=unread.map(function(n){
+      return '<div class="notif-item unread" style="display:flex;align-items:flex-start;gap:8px"><div style="flex:1" onclick="markNotifRead(\''+esc(n.id)+'\')"><div class="title">'+esc(n.title||'')+'</div><div class="body">'+esc(n.body||'')+'</div></div><button class="btn ghost sm" title="Dismiss" aria-label="Mark notification read" onclick="event.stopPropagation();markNotifRead(\''+esc(n.id)+'\')">✕</button></div>';
+    }).join('');
+  }
+  if(!h)h='<div class="notif-empty">✅ All caught up — no active alerts</div>';
+  list.innerHTML=h;
+};
 window.toggleNotifPanel=function(e){
   if(e)e.stopPropagation();
-  var p=document.getElementById('notifPanel');p.classList.toggle('on');
-  var tb=document.getElementById('notifBtn');if(tb)tb.setAttribute('aria-expanded',p.classList.contains('on')?'true':'false');
-  if(p.classList.contains('on')){
-    var list=document.getElementById('notifList');
-    var alerts=collectAlerts();
-    var budgetAlerts=collectBudgetAlerts();
-    var h='';
-    if(budgetAlerts.length){
-      var ovrCount=budgetAlerts.filter(function(a){return a.severity==='overrun';}).length;
-      h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--bad);background:rgba(248,81,73,.08);letter-spacing:.5px">BUDGET ALERTS ('+budgetAlerts.length+(ovrCount?' · '+ovrCount+' OVERRUN':'')+')</div>';
-      h+=budgetAlerts.slice(0,10).map(function(a){
-        return '<div class="notif-item '+(a.severity==='overrun'?'alert':'warn')+'" onclick="closeNotifPanel();goView(\'boq\')"><div class="title">'+esc(a.title)+'</div><div class="body">'+esc(a.detail)+'</div></div>';
-      }).join('');
-    }
-    if(alerts.length){h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--muted);background:var(--panel2)">COMPLIANCE ALERTS ('+alerts.length+')</div>'+alerts.slice(0,10).map(function(a){return '<div class="notif-item '+(a.severity==='expired'?'alert':'warn')+'"><div class="title">'+esc(a.title)+'</div><div class="body">'+esc(a.detail)+'</div></div>';}).join('');}
-    if(state.notifications.length){h+='<div style="padding:8px 16px;font-size:10px;font-weight:800;color:var(--muted);background:var(--panel2)">RECENT NOTIFICATIONS</div>'+state.notifications.map(function(n){return '<div class="notif-item '+(n.is_read?'':'unread')+'" onclick="markNotifRead(\''+esc(n.id)+'\')"><div class="title">'+esc(n.title)+'</div><div class="body">'+esc(n.body||'')+'</div></div>';}).join('');}
-    if(!budgetAlerts.length&&!alerts.length&&!state.notifications.length)h='<div class="notif-empty">'+t('noData')+'</div>';
-    list.innerHTML=h;
-  }
+  var p=document.getElementById('notifPanel');if(!p)return;
+  var open=p.classList.toggle('on');
+  var tb=document.getElementById('notifBtn');if(tb)tb.setAttribute('aria-expanded',open?'true':'false');
+  if(open)renderNotifList();
 };
-window.markNotifRead=async function(id){await supabase.from('notifications').update({is_read:true}).eq('id',id);state.notifications=state.notifications.map(function(n){return n.id===id?Object.assign({},n,{is_read:true}):n;});renderTop();};
-window.markAllNotifsRead=async function(){var ids=state.notifications.filter(function(n){return !n.is_read;}).map(function(n){return n.id;});if(!ids.length)return;await supabase.from('notifications').update({is_read:true}).in('id',ids);state.notifications=state.notifications.map(function(n){return Object.assign({},n,{is_read:true});});renderTop();};
+window.dismissSingleAlert=function(sig){
+  var d=getDismissedAlerts();d[sig]=Date.now();saveDismissedAlerts(d);
+  updateNotifBadge();renderNotifList();renderTop();
+};
+window.dismissAllAlerts=function(){
+  var d=getDismissedAlerts();
+  collectAlerts().forEach(function(a){d[alertSig('comp',a)]=Date.now();});
+  collectBudgetAlerts().forEach(function(a){d[alertSig('bud',a)]=Date.now();});
+  saveDismissedAlerts(d);
+};
+window.markNotifRead=async function(id){
+  state.notifications=state.notifications.map(function(n){return String(n.id)===String(id)?Object.assign({},n,{is_read:true}):n;});
+  updateNotifBadge();renderNotifList();renderTop();
+  if(!supabase)return;
+  try{await supabase.from('notifications').update({is_read:true}).eq('id',id);}catch(e){}
+};
+window.markAllNotifsRead=async function(){
+  var ids=(state.notifications||[]).filter(function(n){return !n.is_read;}).map(function(n){return n.id;});
+  dismissAllAlerts();
+  state.notifications=(state.notifications||[]).map(function(n){return Object.assign({},n,{is_read:true});});
+  updateNotifBadge();renderNotifList();renderTop();
+  render(); /* refresh the approvals badge/list too */
+  if(!supabase){toast('All notifications & alerts cleared ✓','ok');return;}
+  try{if(ids.length)await supabase.from('notifications').update({is_read:true}).in('id',ids);}catch(e){}
+  toast('All notifications & alerts cleared ✓','ok');
+};
 
 /* ============ INVOICE SCANNER (No fake sample fallback) ============ */
 var scanState={running:false,data:null};
@@ -3431,7 +3683,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
-  version:'v29.2',
+  version:'v29.3',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3444,6 +3696,28 @@ Object.defineProperty(window.SF,'currentProject',{get:function(){return state.cu
 Object.defineProperty(window.SF,'currentProjectId',{get:function(){return state.currentProjectId;}});
 Object.defineProperty(window.SF,'parties',{get:function(){return state.parties||[];}});
 Object.defineProperty(window.SF,'language',{get:function(){return appSettings.language;}});
+/* Compatibility surface: externally authored modules (e.g. v28-era patch scripts) expect these
+   globals. They are thin aliases over the same state/functions the app itself uses. */
+window.SF.state=state;
+window.SF.ui.reloadProjectTable=reloadProjectTable;
+window.SF.ui.renderTop=renderTop;
+window.SF.ui.loadCompanyData=loadCompanyData;
+window.SF.ui.newBilling=function(){window.newBilling();};
+window.SF.ui.collectAlerts=collectAlerts;
+window.SF.ui.collectBudgetAlerts=collectBudgetAlerts;
+window.SF.ui.getBoqActualsMap=getBoqActualsMap;
+window.SF.ui.getBoqCommittedMap=getBoqCommittedMap;
+window.SF.db.ensureSupplier=ensureSupplier;
+window.state=state;
+window.SiteForge={state:state,getSupabase:function(){return supabase;},esc:esc,money:money,money0:money0,fmtDate:fmtDate,today:today,toast:toast,openModal:openModal,closeModal:function(){window.closeModal();},updateRow:updateRow,insertRow:insertRow,ensureSupplier:ensureSupplier,render:render,reloadProjectTable:reloadProjectTable,loadCompanyData:loadCompanyData,collectAlerts:collectAlerts,collectBudgetAlerts:collectBudgetAlerts,newBilling:function(){window.newBilling();}};
+window.collectAlerts=collectAlerts;
+window.collectBudgetAlerts=collectBudgetAlerts;
+window.reloadProjectTable=reloadProjectTable;
+window.render=render;
+window.renderTop=renderTop;
+window.loadCompanyData=loadCompanyData;
+window.toast=toast;
+window.openFormModal=openFormModal;
 
-console.log('[SiteForge v29.2] ready · modules:',Object.keys(SFviews).join(', ')||'none');
+console.log('[SiteForge v29.3] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
