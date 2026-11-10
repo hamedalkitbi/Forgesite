@@ -15,7 +15,7 @@ field to the office:
 
 - **BOQ** — bill-of-quantities import (Excel/CSV via SheetJS), sections, rates, certified quantities
 - **Progress billing (IPC)** — cumulative valuation, retention, advance recovery, printable tax invoice
-- **Cost control** — expenses, company budget, materials/POs, payments, change orders, parties
+- **Cost control** — expenses (bill upload/OCR scan + PO reference), company budget, materials/POs, payments, change orders, parties
 - **Field operations** — timesheets, payroll batches, workers & staff, compliance, site reports, drawings, timeline
 - **Governance** — role-based views (director/controller/superintendent/tradesperson), approval workflow with exposure preview, immutable audit trail, notifications
 - **Extras** — client-side OCR bill scanner (Tesseract), Arabic/English UI, dark/light theme
@@ -86,6 +86,7 @@ Run the SQL files in `supabase/migrations/` **in filename order** in the Supabas
 | `202611050001_phase1_accountability.sql` | suppliers master, approval limits + events, server-side RPC approvals, RLS |
 | `202611050002_phase2_workflow.sql` | evidence attachments, closed periods, SLA + escalation, goods received notes |
 | `202611050003_phase3.sql` | retention releases, subcontractor certificates, management metrics |
+| `202611100001_expense_po_notifications.sql` | `company_expenses.company_id` + `po_number`/`bill_path`, resilient closed-period guard, submission notification triggers for POs/expenses/site reports |
 
 Until a migration is applied, its module shows a "needs a database update" card naming the file
 — nothing else in the app breaks.

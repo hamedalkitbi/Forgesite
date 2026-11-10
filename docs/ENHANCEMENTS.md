@@ -169,6 +169,25 @@ Verified by `tools/checks/phase1.mjs` (15) and `tools/checks/suppliers.mjs` (12)
 
 Verified by `tools/checks/phase2.mjs` (16) and `tools/checks/grn.mjs` (10).
 
+## 1.9 Expense bill/PO + submission notifications (v29.7)
+
+- Fixed the `record "new" has no field "company_id"` failure when adding a company expense: the
+  Phase 2 closed-period guard read a column `company_expenses` never had. The new migration adds
+  `company_id` (single-company backfill only) and rewrites `sf_guard_closed_period()` so a missing
+  column can never raise. The app stamps `company_id` on every expense write.
+- New/Edit expense now share one modal with **bill upload + OCR scan** (photo or PDF) stored as
+  `bill_path` under `company/bills/` in `siteforge-files`, and an optional **PO #** (`po_number`,
+  datalist of existing POs) surfaced in the expenses table, search and printed statement.
+- `sf_notify_submission()` triggers notify directors/controllers when a material PO or company
+  expense enters `pending`, and when a site report is submitted. The notifier is exception-guarded
+  so it can never roll back the business write; the app refreshes the bell right after submit.
+- Site-report photo handling hardened: legacy inline photos survive edits, undecodable formats
+  (iPhone HEIC) upload as-is, failed thumbnails show a placeholder, and a missing `photos` column
+  produces a clear "run migration 202611031004" message.
+- Migration `202611100001_expense_po_notifications.sql`.
+
+Verified by `tools/checks/expenses-notifications.mjs` (15).
+
 ## 2. Audit backlog (still open)
 
 Full tables: [`data-integrity.md`](audits/data-integrity.md) · [`ux-a11y.md`](audits/ux-a11y.md) ·

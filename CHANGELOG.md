@@ -3,6 +3,39 @@
 All notable changes are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
 
+## [29.7.0] - 2026-11-10
+
+### Fixed
+- **Company expense insert failed** with `record "new" has no field "company_id"`: the Phase 2
+  closed-period guard read `NEW.company_id` on `company_expenses`, a column the table never had.
+  Migration `202611100001_expense_po_notifications.sql` adds `company_id` (with a safe
+  single-company backfill), rewrites the guard so a missing column can never raise, and the app
+  now stamps `company_id` on every expense write.
+- **Site-report photo upload hardened**: photos are preserved when editing reports saved by older
+  builds (inline `data` images are no longer dropped), formats the browser cannot decode (an
+  iPhone HEIC, for example) are uploaded as-is instead of being rejected, thumbnails show a
+  placeholder instead of silently disappearing when a signed URL fails, and a missing `photos`
+  column now produces a clear "run migration 202611031004" message instead of saving the report
+  without its photos.
+
+### Added
+- **Bill upload + OCR scan inside the expense form**: New and Edit expense share one modal with a
+  bill dropzone — photos are read (server OCR, then in-browser Tesseract fallback), PDFs are
+  accepted, and the file is stored in `siteforge-files` (`company/bills/…`) as `bill_path`. The
+  existing bill can be opened, kept, replaced or removed.
+- **Purchase order on company expenses**: optional PO # (datalist of existing POs from Materials &
+  POs plus prior expenses) stored as `po_number`, shown in the expenses table, the printed
+  statement, and included in expense search.
+- **Submission notifications**: `sf_notify_submission()` triggers notify directors/controllers
+  when a material PO or a company expense enters `pending`, and when a site report is submitted.
+  The notifier is exception-guarded so a notification can never block the business write, and the
+  app refreshes the notification bell immediately after submit.
+- Migration `202611100001_expense_po_notifications.sql` (columns, rewritten guard, notification
+  triggers) — **run it in the Supabase SQL editor after `202611050003_phase3.sql`**.
+
+### Changed
+- Version 29.7.0; service-worker cache `v29.7.0-1`.
+
 ## [29.6.0] - 2026-11-04
 
 ### Added

@@ -266,7 +266,7 @@ function applyI18nStatic(){
   if(lb&&!lb.disabled)lb.textContent=ar?t('signInToContinue').replace('→','←'):t('signInToContinue');
   var userEl=document.getElementById('loginUser');
   if(userEl)userEl.placeholder=ar?'اسم المستخدم':'Your username';
-  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.6';
+  document.title=ar?'SiteForge ERP — إدارة تكاليف الإنشاءات':'SiteForge ERP v29.7';
 }
 
 /* Error-resilient paginated fetcher (never crashes on missing optional tables) */
@@ -1764,7 +1764,9 @@ window.newMaterial=function(){
         created_by:userProfile?userProfile.name:null,
         status:status
       });
-      await reloadProjectTable('materials','created_at',false);render();toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
+      await reloadProjectTable('materials','created_at',false);render();
+      if(status==='pending'){try{await loadNotifications();}catch(e){}}
+      toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
     }
   });
 };
@@ -1788,6 +1790,7 @@ window.editMaterial=function(id){
       if(!isManagerRole())updates.status='pending';
       await updateRow('materials',id,updates);
       await reloadProjectTable('materials','created_at',false);render();
+      if(!isManagerRole()){try{await loadNotifications();}catch(e){}}
       toast(isManagerRole()?t('updatedOk'):'Changes sent for re-approval ✓','ok');
     }
   });
@@ -2240,54 +2243,107 @@ function applyExpenseOcr(p){
   if(c&&p.category)c.value=p.category;
   updateVatHint();checkSupplierHint();
 }
-window.openExpenseScanner=function(){
+/* ── Expense editor: one modal for New / Edit / Scan-bill ──────────────────
+   The bill dropzone lives in the same form as the fields: picking or scanning a
+   bill runs OCR to prefill the fields and the file is uploaded to Supabase
+   Storage as the bill copy. Company expenses can also carry a PO reference so
+   overhead purchases are traceable against a purchase order. */
+var _poNumberCache=null;
+async function expensePoNumbers(){
+  if(_poNumberCache)return _poNumberCache;
+  var seen={};
+  function add(v){v=String(v||'').trim();if(v)seen[v]=1;}
+  (state.expenses||[]).forEach(function(x){add(x.po_number);});
+  (state.materials||[]).forEach(function(x){add(x.po);});
+  try{
+    var r=await supabase.from('materials').select('po_number').not('po_number','is',null).limit(500);
+    ((r&&r.data)||[]).forEach(function(x){add(x.po_number);});
+  }catch(e){}
+  _poNumberCache=Object.keys(seen).sort();
+  return _poNumberCache;
+}
+function fillExpensePoDatalist(){
+  expensePoNumbers().then(function(list){
+    var dl=document.getElementById('eb_po_list');
+    if(dl)dl.innerHTML=list.map(function(v){return '<option value="'+esc(v)+'"></option>';}).join('');
+  }).catch(function(){});
+}
+async function uploadExpenseBillFile(date,supplier){
+  if(!expScan.fileB64)return null;
+  var mime=expScan.mime||'image/jpeg';
+  var ext=/pdf/i.test(mime)?'pdf':(mime.indexOf('png')>=0?'png':'jpg');
+  var path='company/bills/'+String(date||today()).slice(0,7).replace('-','/')+'/'+Date.now()+'_'+String(supplier||'bill').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,40)+'.'+ext;
+  var up=await supabase.storage.from('siteforge-files').upload(path,base64ToBytes(expScan.fileB64),{contentType:mime,upsert:false});
+  if(up&&up.error)throw up.error;
+  return path;
+}
+window.openExpenseScanner=function(){return window.openExpenseEditor();};
+window.openExpenseEditor=function(opts){
+  opts=opts||{};
+  var e=opts.expense||null,isEdit=!!e;
   expScan={file:null,fileB64:null,mime:null};
-  var defProj=state.currentProjectId||(state.projects.length===1?state.projects[0].id:'');
-  var projOptions=state.projects.map(function(p){return '<option value="'+esc(p.id)+'" '+(defProj===p.id?'selected':'')+'>'+esc(p.code)+' · '+esc(p.name)+'</option>';}).join('');
-  var cats=['Materials','Equipment','Transport','Utilities','Professional','Maintenance','Office Supplies','Insurance','Other'];
-  openModal('📷 Scan bill → Expense',
-    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">'+
+  window._expenseEditor={id:isEdit?e.id:null,billPath:isEdit&&e.bill_path?e.bill_path:null,removeBill:false};
+  var cats=['Salaries','Rent','Utilities','Office Supplies','Marketing','Transport','Equipment','Insurance','Professional','Maintenance','Materials','Other'];
+  var curCat=(isEdit&&e.category)?e.category:'Salaries';
+  var projOptions=state.projects.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.code)+' · '+esc(p.name)+'</option>';}).join('');
+  var billNote=isEdit&&e.bill_path?
+    '<div style="margin-top:8px;font-size:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+
+      '<button type="button" class="btn ghost sm" onclick="openBillCopy(\''+esc(e.bill_path)+'\')">📎 Open current bill</button>'+
+      '<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="eb_removebill" onchange="window.toggleExpenseBillRemove(this.checked)" style="width:15px;height:15px;accent-color:var(--accent)"> Remove bill</label>'+
+    '</div>':'';
+  openModal((isEdit?'✎ '+t('edit'):'💸 '+t('newItem'))+' expense',
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'+
       '<div>'+
         '<div class="dropzone" onclick="document.getElementById(\'expBillFile\').click()">'+
-          '<input type="file" id="expBillFile" accept="image/*" capture="environment" style="display:none" onchange="handleExpBillFile(event)">'+
-          '<div style="font-size:32px">📷</div><div style="font-weight:800;margin-top:4px">Photo / upload the bill</div>'+
-          '<div class="mutc" style="font-size:11px;margin-top:4px">Supplier invoice, receipt or delivery note</div>'+
+          '<input type="file" id="expBillFile" accept="image/*,application/pdf" style="display:none" onchange="handleExpBillFile(event)">'+
+          '<div style="font-size:32px">🧾</div><div style="font-weight:800;margin-top:4px">Upload or scan the bill</div>'+
+          '<div class="mutc" style="font-size:11px;margin-top:4px">Photo of the invoice/receipt, or a PDF — fields are read automatically</div>'+
         '</div>'+
+        billNote+
         '<label style="display:flex;gap:7px;align-items:center;margin-top:10px;font-size:12px;font-weight:700;color:var(--muted);cursor:pointer"><input type="checkbox" id="eb_savecopy" checked style="width:15px;height:15px;accent-color:var(--accent)"> Save a copy of the bill</label>'+
-        '<div id="expBillStatus" style="margin-top:10px;padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-family:var(--font-mono);font-size:11px;line-height:1.55;max-height:140px;overflow:auto">Ready. The image is stored as the bill copy and attached to the expense.</div>'+
+        '<div id="expBillStatus" style="margin-top:10px;padding:10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;font-family:var(--font-mono);font-size:11px;line-height:1.55;max-height:140px;overflow:auto">Ready. The bill is attached to the expense and readable from the list.</div>'+
         '<div id="expBillThumb" style="margin-top:10px"></div>'+
       '</div>'+
       '<div class="fgrid" style="grid-template-columns:1fr;gap:10px">'+
-        '<div class="field"><label>'+t('date')+'</label><input id="eb_date" type="date" value="'+today()+'"></div>'+
-        '<div class="field"><label>'+t('supplier')+' / '+t('paidTo')+'</label><input id="eb_supplier" placeholder="Supplier name" autocomplete="off"><div id="eb_supplier_hint" class="mutc" style="font-size:10.5px;min-height:14px"></div></div>'+
-        '<div class="field"><label>'+t('category')+'</label><select id="eb_category">'+cats.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>'+
-        '<div class="field"><label>'+t('description')+'</label><input id="eb_desc" placeholder="What was bought"></div>'+
-        '<div class="field"><label>'+t('amount')+' (AED, incl. VAT)</label><input id="eb_amount" type="number" step="0.01" min="0" placeholder="0.00"><div id="eb_vat" class="mutc" style="font-size:10.5px"></div></div>'+
-        '<div class="field"><label>'+t('method')+'</label><select id="eb_method"><option>Cash</option><option>Bank Transfer</option><option>Cheque</option><option>Credit Card</option><option>Other</option></select></div>'+
-        '<div class="field"><label>Register supplier under project</label><select id="eb_project" onchange="checkSupplierHint()"><option value="">— do not register —</option>'+projOptions+'</select></div>'+
+        '<div class="field"><label>'+t('date')+'</label><input id="eb_date" type="date" value="'+esc(isEdit?e.expense_date||today():today())+'"></div>'+
+        '<div class="field"><label>'+t('supplier')+' / '+t('paidTo')+'</label><input id="eb_supplier" placeholder="Supplier name" autocomplete="off" value="'+esc(isEdit?e.paid_to||'':'')+'"><div id="eb_supplier_hint" class="mutc" style="font-size:10.5px;min-height:14px"></div></div>'+
+        '<div class="field"><label>'+t('category')+'</label><select id="eb_category">'+cats.map(function(c){return '<option'+(c===curCat?' selected':'')+'>'+c+'</option>';}).join('')+'</select></div>'+
+        '<div class="field"><label>'+t('description')+'</label><input id="eb_desc" placeholder="What was bought" value="'+esc(isEdit?e.description||'':'')+'"></div>'+
+        '<div class="field"><label>'+t('amount')+' (AED, incl. VAT)</label><input id="eb_amount" type="number" step="0.01" min="0" placeholder="0.00" value="'+esc(isEdit&&e.amount!=null?e.amount:'')+'"><div id="eb_vat" class="mutc" style="font-size:10.5px"></div></div>'+
+        '<div class="field"><label>'+t('method')+'</label><select id="eb_method">'+['Cash','Bank Transfer','Cheque','Credit Card','Other'].map(function(m){return '<option'+(isEdit&&(e.payment_method||'Bank Transfer')===m?' selected':'')+'>'+m+'</option>';}).join('')+'</select></div>'+
+        '<div class="field"><label>PO # (optional)</label><input id="eb_po" list="eb_po_list" placeholder="e.g. PO-2051" autocomplete="off" value="'+esc(isEdit?e.po_number||'':'')+'"><datalist id="eb_po_list"></datalist><div class="mutc" style="font-size:10.5px">Link this expense to a purchase order, or leave blank for overheads.</div></div>'+
+        (isEdit?'':'<div class="field"><label>Register supplier under project</label><select id="eb_project" onchange="checkSupplierHint()"><option value="">— do not register —</option>'+projOptions+'</select></div>')+
       '</div>'+
     '</div>'+
     '<div class="ferror" id="eb_err"></div>',
-    '<button class="btn ghost" onclick="closeModal()">'+t('cancel')+'</button><button class="btn" id="eb_save" onclick="saveScannedExpense()">Save expense</button>',
+    '<button class="btn ghost" onclick="closeModal()">'+t('cancel')+'</button><button class="btn" id="eb_save" onclick="saveExpenseForm()">'+(isEdit?t('save'):'Save expense')+'</button>',
     {wide:true});
   setTimeout(function(){
     var a=document.getElementById('eb_amount');if(a)a.addEventListener('input',updateVatHint);
     var s=document.getElementById('eb_supplier');if(s)s.addEventListener('blur',checkSupplierHint);
-    updateVatHint();
+    updateVatHint();checkSupplierHint();fillExpensePoDatalist();
   },50);
+};
+window.toggleExpenseBillRemove=function(checked){
+  window._expenseEditor=window._expenseEditor||{};
+  window._expenseEditor.removeBill=!!checked;
+  setBillStatus(checked?'Bill copy will be removed on save.':'Existing bill copy kept.');
 };
 window.handleExpBillFile=function(ev){
   var f=ev.target.files&&ev.target.files[0];if(!f)return;
-  if(f.size>12*1024*1024){toast('Image too large (max 12 MB)','bad');return;}
-  expScan.file=f;expScan.mime=f.type||'image/jpeg';
+  if(f.size>12*1024*1024){toast('File too large (max 12 MB)','bad');return;}
+  var isPdf=/pdf/i.test(f.type||'')||/\.pdf$/i.test(f.name||'');
+  expScan.file=f;expScan.mime=isPdf?'application/pdf':(f.type||'image/jpeg');
   var rd=new FileReader();
   rd.onload=function(e){
-    var url=e.target.result;
-    expScan.fileB64=String(url).split(',')[1]||null;
+    var url=String(e.target.result||'');
+    expScan.fileB64=url.split(',')[1]||null;
     var thumb=document.getElementById('expBillThumb');
-    if(thumb)thumb.innerHTML='<img src="'+url+'" style="max-width:100%;max-height:170px;border-radius:8px;border:1px solid var(--line)">';
+    if(thumb)thumb.innerHTML=isPdf?'<div class="tag info">📄 '+esc(f.name||'bill.pdf')+' attached</div>':'<img src="'+esc(url)+'" alt="Bill preview" style="max-width:100%;max-height:170px;border-radius:8px;border:1px solid var(--line)">';
+    if(isPdf){setBillStatus('📄 PDF attached. OCR reads photos only — type the amount, then save.');return;}
     runExpenseOcr(expScan.fileB64,expScan.mime);
   };
+  rd.onerror=function(){toast('Could not read that file','bad');};
   rd.readAsDataURL(f);
 };
 async function runExpenseOcr(b64,mime){
@@ -2318,50 +2374,58 @@ async function runExpenseOcr(b64,mime){
     setBillStatus('✗ Could not read this bill ('+(err.message||err)+'). Fill the fields manually - the image is still saved as the bill copy.');
   }
 }
-window.saveScannedExpense=async function(){
+window.saveExpenseForm=async function(){
   var btn=document.getElementById('eb_save');if(btn&&btn.disabled)return;
   var errEl=document.getElementById('eb_err');if(errEl)errEl.textContent='';
-  var date=document.getElementById('eb_date').value;
-  var supplier=document.getElementById('eb_supplier').value.trim();
-  var category=document.getElementById('eb_category').value;
-  var desc=document.getElementById('eb_desc').value.trim()||supplier||'Scanned bill';
-  var amount=Number(document.getElementById('eb_amount').value);
-  var method=document.getElementById('eb_method').value;
-  var projSel=document.getElementById('eb_project').value;
+  var ed=window._expenseEditor||{};
+  function val(id){var el=document.getElementById(id);return el&&el.value!=null?el.value:'';}
+  var date=val('eb_date');
+  var supplier=String(val('eb_supplier')).trim();
+  var category=val('eb_category')||'Salaries';
+  var desc=String(val('eb_desc')).trim()||supplier||'Expense';
+  var amount=Number(val('eb_amount'));
+  var method=val('eb_method')||'Bank Transfer';
+  var po=String(val('eb_po')).trim()||null;
+  var projSel=val('eb_project');
   var copyEl=document.getElementById('eb_savecopy');
   var keepCopy=copyEl?copyEl.checked:true;
   if(!date){if(errEl)errEl.textContent='Date is required';return;}
   if(!(amount>0)){if(errEl)errEl.textContent='Amount must be greater than zero';return;}
   if(btn){btn.disabled=true;btn.textContent='Saving…';}
   try{
-    var billPath=null;
-    if(keepCopy&&expScan.fileB64){
-      try{
-        var ext=(expScan.mime&&expScan.mime.indexOf('png')>=0)?'png':'jpg';
-        var path='company/bills/'+date.slice(0,7).replace('-','/')+'/'+Date.now()+'_'+String(supplier||'bill').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,40)+'.'+ext;
-        var up=await supabase.storage.from('siteforge-files').upload(path,base64ToBytes(expScan.fileB64),{contentType:expScan.mime||'image/jpeg',upsert:false});
-        if(up.error)throw up.error;
-        billPath=path;
-      }catch(e){
-        setBillStatus('⚠ Image not uploaded ('+(e.message||e)+'). The expense is still saved.');
-      }
+    var billPath=ed.removeBill?null:(ed.billPath||null);
+    if(expScan.fileB64){
+      if(keepCopy){
+        try{billPath=await uploadExpenseBillFile(date,supplier||desc);setBillStatus('✓ Bill uploaded.');}
+        catch(e){setBillStatus('⚠ Bill upload failed ('+((e&&e.message)||e)+'). The expense is saved without the new bill.');}
+      }else{setBillStatus('Bill copy not kept (unchecked).');}
     }
-    var payload={category:category,description:desc,amount:amount,expense_date:date,paid_to:supplier||null,payment_method:method,created_by:userProfile.name,status:(isManagerRole()?'approved':'pending')};
-    if(billPath)payload.bill_path=billPath;
-    await insertRow('company_expenses',payload);
-    var reg=null;
-    if(supplier){try{reg=await ensureSupplier(supplier,projSel||null);}catch(e){console.warn('supplier register failed',e);}}
+    var payload={category:category,description:desc,amount:amount,expense_date:date,paid_to:supplier||null,payment_method:method,po_number:po,company_id:state.company?state.company.id:null};
+    var isNew=!ed.id,reg=null;
+    if(isNew){
+      payload.created_by=userProfile?userProfile.name:null;
+      payload.status=isManagerRole()?'approved':'pending';
+      if(billPath)payload.bill_path=billPath;
+      await insertRow('company_expenses',payload);
+    }else{
+      if(billPath!==(ed.billPath||null))payload.bill_path=billPath;
+      await updateRow('company_expenses',ed.id,payload);
+    }
+    if(isNew&&supplier&&projSel){try{reg=await ensureSupplier(supplier,projSel);}catch(e){console.warn('supplier register failed',e);}}
     await loadCompanyData();
     closeModal();render();
-    var msg='Expense saved';
-    if(reg&&reg.created)msg='Expense saved, supplier "'+supplier+'" registered';
-    else if(reg&&reg.reason==='no-project'&&supplier)msg='Expense saved. Pick a project to register the supplier.';
+    if(isNew&&payload.status==='pending'){try{await loadNotifications();}catch(e){}}
+    var msg=isNew?(payload.status==='pending'?'Expense submitted for approval ✓':'Expense saved'):'Expense updated';
+    if(reg&&reg.created)msg+=' · supplier "'+supplier+'" registered';
+    else if(reg&&reg.reason==='no-project'&&supplier)msg+=' · pick a project to register the supplier';
+    else if(!billPath&&!isNew)msg+=' · bill copy removed';
     toast(msg,'ok');
   }catch(e){
-    if(btn){btn.disabled=false;btn.textContent='Save expense';}
-    if(errEl)errEl.textContent='✗ '+(e.message||e);
+    if(btn){btn.disabled=false;btn.textContent=ed.id?t('save'):'Save expense';}
+    if(errEl)errEl.textContent='✗ '+((e&&e.message)||e);
   }
 };
+window.saveScannedExpense=function(){return window.saveExpenseForm();};
 function renderExpenses(el){
   var canEdit=userProfile&&['director','controller'].indexOf(userProfile.role)>=0;
   if(!window._expFilter)window._expFilter={q:'',cat:'all',method:'all',from:'',to:''};
@@ -2377,7 +2441,7 @@ function renderExpenses(el){
       '<input id="expTo" type="date" value="'+esc(f.to)+'" onchange="setExpenseFilter(\'to\',this.value)" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px">'+
       '<button class="btn ghost sm" onclick="printExpenses()">🖨 Print</button>'+
     '</div><div id="expSummary" class="mutc" style="margin-top:8px;font-size:12px"></div></div>'+
-    '<div class="card"><div style="overflow-x:auto"><table><thead><tr><th>'+t('date')+'</th><th>'+t('category')+'</th><th>'+t('description')+'</th><th>'+t('paidTo')+'</th><th>'+t('method')+'</th><th class="tright">'+t('amount')+'</th><th></th></tr></thead><tbody id="expBody"></tbody></table></div></div>';
+    '<div class="card"><div style="overflow-x:auto"><table><thead><tr><th>'+t('date')+'</th><th>'+t('category')+'</th><th>'+t('description')+'</th><th>PO #</th><th>'+t('paidTo')+'</th><th>'+t('method')+'</th><th class="tright">'+t('amount')+'</th><th></th></tr></thead><tbody id="expBody"></tbody></table></div></div>';
   renderExpenseRows();
 }
 function filteredExpenses(){
@@ -2390,7 +2454,7 @@ function filteredExpenses(){
     if(f.from&&d<f.from)return false;
     if(f.to&&d>f.to)return false;
     if(q){
-      var blob=((e.description||'')+' '+(e.paid_to||'')+' '+(e.category||'')).toLowerCase();
+      var blob=((e.description||'')+' '+(e.paid_to||'')+' '+(e.category||'')+' '+(e.po_number||'')).toLowerCase();
       if(blob.indexOf(q)<0)return false;
     }
     return true;
@@ -2404,8 +2468,8 @@ function renderExpenseRows(){
   var sum=document.getElementById('expSummary');
   if(sum)sum.textContent=rows.length+' shown · '+money(total);
   body.innerHTML=rows.length?rows.map(function(e){
-    return '<tr><td class="mono mutc">'+fmtDate(e.expense_date)+'</td><td><span class="tag mut">'+esc(e.category)+'</span></td><td>'+esc(e.description)+((e.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(e.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+'</td><td>'+esc(e.paid_to||'—')+'</td><td class="mutc">'+esc(e.payment_method||'—')+'</td><td class="tright mono">'+money(e.amount)+'</td><td class="tright" style="white-space:nowrap">'+(e.bill_path?'<button class="btn ghost sm" title="Bill copy" onclick="openBillCopy(\''+esc(e.bill_path)+'\')">📎</button> ':'')+(isManagerRole()&&(e.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'company_expenses\',\''+esc(e.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'company_expenses\',\''+esc(e.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editExpense(\''+esc(e.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteExpense(\''+esc(e.id)+'\')">✕</button>':'')+'</td></tr>';
-  }).join('')+'<tr style="background:var(--panel2);font-weight:800"><td colspan="5">Filtered total</td><td class="tright mono">'+money(total)+'</td><td></td></tr>':'<tr><td colspan="7" class="empty">'+t('noData')+'</td></tr>';
+    return '<tr><td class="mono mutc">'+fmtDate(e.expense_date)+'</td><td><span class="tag mut">'+esc(e.category)+'</span></td><td>'+esc(e.description)+((e.status||'approved')==='pending'?' <span class="tag warn">PENDING</span>':(e.status||'')==='rejected'?' <span class="tag bad">REJECTED</span>':'')+'</td><td class="mono mutc">'+esc(e.po_number||'—')+'</td><td>'+esc(e.paid_to||'—')+'</td><td class="mutc">'+esc(e.payment_method||'—')+'</td><td class="tright mono">'+money(e.amount)+'</td><td class="tright" style="white-space:nowrap">'+(e.bill_path?'<button class="btn ghost sm" title="Bill copy" onclick="openBillCopy(\''+esc(e.bill_path)+'\')">📎</button> ':'')+(isManagerRole()&&(e.status||'approved')==='pending'?'<button class="btn ok sm" onclick="approveItem(\'company_expenses\',\''+esc(e.id)+'\')">✓</button> <button class="btn bad sm" onclick="rejectItem(\'company_expenses\',\''+esc(e.id)+'\')">✕</button> ':'')+(canEdit?'<button class="btn ghost sm" onclick="editExpense(\''+esc(e.id)+'\')">✎</button> <button class="btn bad sm" onclick="deleteExpense(\''+esc(e.id)+'\')">✕</button>':'')+'</td></tr>';
+  }).join('')+'<tr style="background:var(--panel2);font-weight:800"><td colspan="6">Filtered total</td><td class="tright mono">'+money(total)+'</td><td></td></tr>':'<tr><td colspan="8" class="empty">'+t('noData')+'</td></tr>';
 }
 window.setExpenseFilter=function(key,val){
   window._expFilter=window._expFilter||{q:'',cat:'all',method:'all',from:'',to:''};
@@ -2421,27 +2485,16 @@ window.printExpenses=function(){
   var html='<!DOCTYPE html><html><head><meta charset="utf-8"><title>Expense statement</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th{text-align:left;background:#f3f3f3;padding:7px;border-bottom:2px solid #111}td{padding:7px;border-bottom:1px solid #ddd}.right{text-align:right}.total{font-weight:800}</style></head><body>'+
     '<h1>'+esc(c.name||'SiteForge')+' — Expense statement</h1>'+
     '<div style="font-size:12px;color:#444">'+esc([f.cat&&f.cat!=='all'?f.cat:'All categories', f.method&&f.method!=='all'?f.method:'All methods', (f.from||f.to)?((f.from||'…')+' → '+(f.to||'…')):'All dates', f.q?('Search: '+f.q):''].filter(Boolean).join(' · '))+'</div>'+
-    '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Paid to</th><th>Method</th><th class="right">Amount (AED)</th></tr></thead><tbody>'+
-    (rows.length?rows.map(function(e){return '<tr><td>'+fmtDate(e.expense_date)+'</td><td>'+esc(e.category||'')+'</td><td>'+esc(e.description||'')+'</td><td>'+esc(e.paid_to||'')+'</td><td>'+esc(e.payment_method||'')+'</td><td class="right">'+money(e.amount)+'</td></tr>';}).join(''):'<tr><td colspan="6">No rows</td></tr>')+
-    '<tr class="total"><td colspan="5">Total</td><td class="right">'+money(total)+'</td></tr></tbody></table></body></html>';
+    '<table><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>PO #</th><th>Paid to</th><th>Method</th><th class="right">Amount (AED)</th></tr></thead><tbody>'+
+    (rows.length?rows.map(function(e){return '<tr><td>'+fmtDate(e.expense_date)+'</td><td>'+esc(e.category||'')+'</td><td>'+esc(e.description||'')+'</td><td>'+esc(e.po_number||'')+'</td><td>'+esc(e.paid_to||'')+'</td><td>'+esc(e.payment_method||'')+'</td><td class="right">'+money(e.amount)+'</td></tr>';}).join(''):'<tr><td colspan="7">No rows</td></tr>')+
+    '<tr class="total"><td colspan="6">Total</td><td class="right">'+money(total)+'</td></tr></tbody></table></body></html>';
   var w=window.open('','_blank');if(!w){toast('Allow pop-ups to print','bad');return;}w.document.write(html);w.document.close();setTimeout(function(){w.print();},400);
 };
-window.newExpense=function(){
-  openFormModal({title:t('newItem')+' expense',
-    fields:[{key:'expense_date',label:t('date'),type:'date',required:true,default:today()},{key:'category',label:t('category'),required:true,type:'select',options:['Salaries','Rent','Utilities','Office Supplies','Marketing','Transport','Equipment','Insurance','Professional','Maintenance','Other']},{key:'description',label:t('description'),required:true,full:true},{key:'amount',label:t('amount')+' (AED)',type:'number',step:'0.01',required:true},{key:'paid_to',label:t('paidTo')},{key:'payment_method',label:t('method'),type:'select',options:['Cash','Bank Transfer','Cheque','Credit Card','Other'],default:'Bank Transfer'}],
-    onSubmit:async function(d){
-      var status=isManagerRole()?'approved':'pending';
-      await insertRow('company_expenses',{category:d.category,description:d.description,amount:Number(d.amount),expense_date:d.expense_date,paid_to:d.paid_to||null,payment_method:d.payment_method,created_by:userProfile.name,status:status});
-      await loadCompanyData();render();toast(status==='pending'?'Submitted for approval ✓':t('savedOk'),'ok');
-    }
-  });
-};
+window.newExpense=function(){return window.openExpenseEditor();};
 window.editExpense=function(id){
-  var e=state.expenses.find(function(x){return x.id===id;});if(!e)return;
-  openFormModal({title:t('edit')+' expense',values:{expense_date:e.expense_date,category:e.category,description:e.description,amount:e.amount,paid_to:e.paid_to||'',payment_method:e.payment_method||'Bank Transfer'},
-    fields:[{key:'expense_date',label:t('date'),type:'date',required:true},{key:'category',label:t('category'),required:true,type:'select',options:['Salaries','Rent','Utilities','Office Supplies','Marketing','Transport','Equipment','Insurance','Professional','Maintenance','Other']},{key:'description',label:t('description'),required:true,full:true},{key:'amount',label:t('amount')+' (AED)',type:'number',step:'0.01',required:true},{key:'paid_to',label:t('paidTo')},{key:'payment_method',label:t('method'),type:'select',options:['Cash','Bank Transfer','Cheque','Credit Card','Other']}],
-    onSubmit:async function(d){await updateRow('company_expenses',id,{category:d.category,description:d.description,amount:Number(d.amount),expense_date:d.expense_date,paid_to:d.paid_to||null,payment_method:d.payment_method});await loadCompanyData();render();toast(t('updatedOk'),'ok');}
-  });
+  var e=(state.expenses||[]).find(function(x){return x.id===id;});
+  if(!e)return toast('Expense not found','bad');
+  return window.openExpenseEditor({expense:e});
 };
 window.deleteExpense=function(id){if(!confirm('Delete?'))return;deleteRow('company_expenses',id).then(async function(){await loadCompanyData();render();toast(t('deletedOk'),'ok');}).catch(function(e){toast(e.message,'bad');});};
 
@@ -2753,7 +2806,8 @@ async function fillPhotoThumbs(container,photos,onclickFn){
     var u=await reportPhotoUrl(photos[i]);
     var cell=container.querySelector('[data-i="'+i+'"]');
     if(!cell)continue;
-    if(u){var img=cell.querySelector('img');if(img)img.src=u;}else{cell.style.display='none';}
+    if(u){var img=cell.querySelector('img');if(img)img.src=u;}
+    else{cell.style.opacity='.55';cell.title='Photo unavailable (storage policy or missing file)';cell.innerHTML='<div style="display:grid;place-items:center;height:100%;font-size:18px">📷</div>';}
   }
 }
 async function uploadReportPhotos(reportId,errEl){
@@ -2761,6 +2815,7 @@ async function uploadReportPhotos(reportId,errEl){
   for(var i=0;i<list.length;i++){
     var p=list[i];
     if(p.path){out.push({name:p.name,path:p.path,size:p.size||null});continue;}
+    if(p.data){out.push({name:p.name,data:p.data,size:p.size||null});continue;}
     if(!p.blob)continue;
     var fname=String(p.name||'photo.jpg').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-60);
     var path=state.currentProjectId+'/site-reports/'+reportId+'/'+Date.now()+'_'+i+'_'+fname;
@@ -2775,6 +2830,19 @@ async function uploadReportPhotos(reportId,errEl){
     out.push({name:p.name,path:stored,size:p.size||null});
   }
   return out;
+}
+/* The photos jsonb column comes from migration 202611031004. Probe once so a
+   missing column produces one clear "run the migration" message instead of a
+   report that silently saves without its photos. */
+var _srPhotosColumn=null;
+async function siteReportsPhotosSupported(){
+  if(_srPhotosColumn!==null)return _srPhotosColumn;
+  try{
+    var r=await supabase.from('site_reports').select('photos').limit(1);
+    _srPhotosColumn=!(r&&r.error);
+  }catch(e){_srPhotosColumn=false;}
+  if(!_srPhotosColumn)console.warn('[SiteForge] site_reports.photos missing — run supabase/migrations/202611031004_po_approvals_and_site_photos.sql');
+  return _srPhotosColumn;
 }
 window.newSiteReport=function(){
   window._reportPhotos=[];window._editingReportId=null;
@@ -2807,7 +2875,16 @@ window.handleReportPhotos=function(ev){
           renderReportPhotoGrid();
         },mime,0.78);
       };
-      img.onerror=function(){toast('✗ '+f.name+' is not a valid image','bad');};
+      img.onerror=function(){
+        /* This browser cannot decode the format (an iPhone HEIC is the common
+           case). Keep the original file untouched so the photo is still
+           uploaded instead of being silently dropped. */
+        if(!/^image\//i.test(f.type||'')){toast('✗ '+f.name+' is not an image','bad');return;}
+        var rawName=String(f.name||'photo').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-60);
+        window._reportPhotos.push({name:rawName,mime:f.type,blob:f,preview:'',size:f.size,raw:true});
+        renderReportPhotoGrid();
+        toast('📷 '+f.name+' added (preview unavailable in this browser — it will still be uploaded)','ok');
+      };
       img.src=e.target.result;
     };
     rd.readAsDataURL(f);
@@ -2825,6 +2902,7 @@ async function renderReportPhotoGrid(){
     var u=await reportPhotoUrl(items[i]);
     var cell=g.querySelector('[data-i="'+i+'"]');
     if(cell&&u){var img=cell.querySelector('img');if(img)img.src=u;}
+    else if(cell&&items[i]&&items[i].raw){cell.title='Original file attached — no preview';cell.style.opacity='.7';}
   }
 }
 window.removeReportPhoto=function(i){
@@ -2837,13 +2915,21 @@ window.saveSiteReport=async function(){
   var errEl=document.getElementById('sr_err');
   var d={report_date:document.getElementById('sr_date').value,title:document.getElementById('sr_title').value.trim(),weather:document.getElementById('sr_weather').value,temperature:Number(document.getElementById('sr_temp').value)||null,workforce_count:Number(document.getElementById('sr_wf').value)||0,activities:document.getElementById('sr_act').value.trim()||null,issues:document.getElementById('sr_iss').value.trim()||null,safety_notes:document.getElementById('sr_safety').value.trim()||null};
   if(!d.report_date||!d.title){if(errEl)errEl.textContent='Date and title required';return;}
+  var pending=(window._reportPhotos||[]).filter(function(p){return p.blob&&!p.path;}).length;
+  if(pending&&!(await siteReportsPhotosSupported())){
+    if(errEl)errEl.textContent='✗ Photo upload needs a database update: run supabase/migrations/202611031004_po_approvals_and_site_photos.sql, then save again.';
+    return;
+  }
   var reportId=window._editingReportId||genUUID();
   if(btn)btn.disabled=true;
+  if(pending&&errEl)errEl.textContent='⟳ Uploading '+pending+' photo(s)…';
   try{
     var photos=await uploadReportPhotos(reportId,errEl);
     if(photos===null){if(btn)btn.disabled=false;return;}
     await insertRow('site_reports',Object.assign({id:reportId},d,{project_id:state.currentProjectId,photos:photos,created_by:userProfile.name}));
-    await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('savedOk'),'ok');
+    await reloadProjectTable('site_reports','report_date',false);closeModal();render();
+    try{await loadNotifications();}catch(e){}
+    toast(photos.length?('✓ Report saved with '+photos.length+' photo(s)'):t('savedOk'),'ok');
   }catch(e){if(btn)btn.disabled=false;if(errEl)errEl.textContent='✗ '+((e&&e.message)||e);}
 };
 window.viewSiteReport=function(id){
@@ -2882,12 +2968,19 @@ window.saveEditSiteReport=async function(id){
   var errEl=document.getElementById('sr_err');
   var d={report_date:document.getElementById('sr_date').value,title:document.getElementById('sr_title').value.trim(),weather:document.getElementById('sr_weather').value,temperature:Number(document.getElementById('sr_temp').value)||null,workforce_count:Number(document.getElementById('sr_wf').value)||0,activities:document.getElementById('sr_act').value.trim()||null,issues:document.getElementById('sr_iss').value.trim()||null,safety_notes:document.getElementById('sr_safety').value.trim()||null};
   if(!d.report_date||!d.title){if(errEl)errEl.textContent='Required';return;}
+  var pending=(window._reportPhotos||[]).filter(function(p){return p.blob&&!p.path;}).length;
+  if(pending&&!(await siteReportsPhotosSupported())){
+    if(errEl)errEl.textContent='✗ Photo upload needs a database update: run supabase/migrations/202611031004_po_approvals_and_site_photos.sql, then save again.';
+    return;
+  }
   if(btn)btn.disabled=true;
+  if(pending&&errEl)errEl.textContent='⟳ Uploading '+pending+' photo(s)…';
   try{
     var photos=await uploadReportPhotos(id,errEl);
     if(photos===null){if(btn)btn.disabled=false;return;}
     await updateRow('site_reports',id,Object.assign({},d,{photos:photos}));
-    await reloadProjectTable('site_reports','report_date',false);closeModal();render();toast(t('updatedOk'),'ok');
+    await reloadProjectTable('site_reports','report_date',false);closeModal();render();
+    toast(photos.length?('✓ Report updated with '+photos.length+' photo(s)'):t('updatedOk'),'ok');
   }catch(e){if(btn)btn.disabled=false;if(errEl)errEl.textContent='✗ '+((e&&e.message)||e);}
 };
 window.deleteSiteReport=function(id){
@@ -3888,7 +3981,7 @@ window.SF={
     return Object.keys(SFviews).map(function(k){return SFviews[k];}).filter(function(v){return v.nav&&(v.nav.section||'project')===section;});
   },
   hasViewDefined:function(id){return !!SFviews[id];},
-  version:'v29.6',
+  version:'v29.7',
   /* Modules can feed their pending items into the single Executive Approvals Queue. */
   approvalsSources:[],
   approvalsRefresh:[],
@@ -3930,6 +4023,14 @@ window.SF.ui.openApprovalsInbox=function(){window._appInbox='forme';window._appF
 window.SF.periods={list:closedPeriodsOf,isClosed:isPeriodClosed,close:async function(period,reason){await insertRow('closed_periods',{company_id:state.company?state.company.id:null,period:period,closed_by:userProfile?userProfile.name:null,reason:reason||null});await loadCompanyData();},reopen:async function(period){var rows=closedPeriodsOf().filter(function(p){return p.period===period;});for(var i=0;i<rows.length;i++){await deleteRow('closed_periods',rows[i].id);}await loadCompanyData();}};
 window.SF.grn={list:function(){return state.grn||[];},receivedQty:grnReceivedQty,matched:grnMatched,forMaterial:function(mid){return (state.grn||[]).filter(function(g){return g.material_id===mid;});},guard:grnMatched,guardPayment:grnMatchedForPayment,add:async function(g){return await insertRow('goods_received_notes',Object.assign({project_id:state.currentProjectId},g));}};
 window.SF.attachments={list:listAttachments,upload:uploadAttachment,remove:removeAttachment,requiredFor:attachmentRequiredFor};
+window.SF.expenses={
+  open:function(opts){return window.openExpenseEditor(opts);},
+  poNumbers:expensePoNumbers,
+  uploadBill:uploadExpenseBillFile,
+  setPendingBill:function(b64,mime){expScan.fileB64=b64||null;expScan.mime=mime||'image/jpeg';},
+  pendingBill:function(){return expScan.fileB64?{mime:expScan.mime}:null;},
+  billPath:function(){return (window._expenseEditor||{}).billPath||null;}
+};
 window.SF.retention={
   _releasedTotal:0,
   refresh:async function(){if(!supabase)return;try{var r=await supabase.from('retention_releases').select('amount_aed');if(!r.error&&r.data){var t=0;r.data.forEach(function(x){t+=Number(x.amount_aed)||0;});window.SF.retention._releasedTotal=Math.round(t*100)/100;}}catch(e){}},
@@ -3939,5 +4040,5 @@ window.SF.retention={
 };
 window.SF.sla={get:function(){return state.approvalSla||{sla_days:3};},days:function(){var o=state.approvalSla||{};return Number(o.sla_days!=null?o.sla_days:3);},set:async function(days){var row=(state.approvalSla&&state.approvalSla.id)?state.approvalSla:null;if(row){await updateRow('approval_sla',row.id,{sla_days:Number(days)||3});}else{await insertRow('approval_sla',{company_id:state.company?state.company.id:null,sla_days:Number(days)||3});}await loadCompanyData();}};
 
-console.log('[SiteForge v29.6] ready · modules:',Object.keys(SFviews).join(', ')||'none');
+console.log('[SiteForge v29.7] ready · modules:',Object.keys(SFviews).join(', ')||'none');
 })();
